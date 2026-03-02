@@ -4738,6 +4738,23 @@ fn build_compact_agent_schema(cmd: &clap::Command) -> serde_json::Value {
     serde_json::Value::Object(root)
 }
 
+/// Returns true if a leaf subcommand name represents a write (mutating) operation.
+/// Used by both the read-only runtime guard and the agent JSON schema.
+pub(crate) fn is_write_command_name(name: &str) -> bool {
+    name == "delete" || name == "create" || name == "update"
+        || name == "cancel" || name == "trigger" || name == "set"
+        || name == "add" || name == "remove" || name == "assign"
+        || name == "archive" || name == "unarchive"
+        || name == "activate" || name == "deactivate"
+        || name == "move" || name == "link" || name == "unlink"
+        || name == "configure" || name == "upgrade"
+        || name.starts_with("update-") || name.starts_with("create-")
+        || name == "submit" || name == "send" || name == "import"
+        || name == "register" || name == "unregister"
+        || name.contains("delete")
+        || name == "patch" || name.starts_with("patch-")
+}
+
 fn build_command_schema(cmd: &clap::Command, parent_path: &str) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     let name = cmd.get_name().to_string();
@@ -4756,28 +4773,7 @@ fn build_command_schema(cmd: &clap::Command, parent_path: &str) -> serde_json::V
 
     // Determine read_only based on command name — but only emit for leaf commands
     // (commands with no subcommands), matching Go behavior
-    let is_write = name == "delete"
-        || name == "create"
-        || name == "update"
-        || name == "cancel"
-        || name == "trigger"
-        || name == "set"
-        || name == "add"
-        || name == "remove"
-        || name == "assign"
-        || name == "archive"
-        || name == "unarchive"
-        || name == "activate"
-        || name == "deactivate"
-        || name.starts_with("update-")
-        || name.starts_with("create-")
-        || name == "submit"
-        || name == "send"
-        || name == "import"
-        || name == "register"
-        || name == "unregister"
-        || name.contains("delete")
-        || name.contains("patch");
+    let is_write = is_write_command_name(&name);
 
     // Flags (named --flags only, excluding positional args and globals)
     let flags: Vec<serde_json::Value> = cmd
