@@ -264,47 +264,6 @@ fn find_endpoint_requirement(method: &str, path: &str) -> Option<&'static Endpoi
 /// Trailing "/" means prefix match for ID-parameterized paths.
 #[cfg(not(target_arch = "wasm32"))]
 static OAUTH_EXCLUDED_ENDPOINTS: &[EndpointRequirement] = &[
-    // RUM API (10)
-    EndpointRequirement {
-        path: "/api/v2/rum/applications",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications/",
-        method: "PATCH",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications/",
-        method: "DELETE",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/metrics",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/metrics/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/retention_filters",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/retention_filters/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/events/search",
-        method: "POST",
-    },
     // API/App Keys (8)
     EndpointRequirement {
         path: "/api/v2/api_keys",
@@ -402,27 +361,6 @@ static OAUTH_EXCLUDED_ENDPOINTS: &[EndpointRequirement] = &[
     EndpointRequirement {
         path: "/api/v2/fleet/schedules/",
         method: "POST",
-    },
-    // Notebooks (5)
-    EndpointRequirement {
-        path: "/api/v1/notebooks",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v1/notebooks",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v1/notebooks/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v1/notebooks/",
-        method: "PUT",
-    },
-    EndpointRequirement {
-        path: "/api/v1/notebooks/",
-        method: "DELETE",
     },
 ];
 
@@ -552,9 +490,9 @@ mod tests {
     }
 
     #[test]
-    fn test_requires_api_key_fallback_rum() {
-        assert!(requires_api_key_fallback("GET", "/api/v2/rum/applications"));
-        assert!(requires_api_key_fallback(
+    fn test_no_fallback_for_rum() {
+        assert!(!requires_api_key_fallback("GET", "/api/v2/rum/applications"));
+        assert!(!requires_api_key_fallback(
             "GET",
             "/api/v2/rum/applications/abc-123"
         ));
@@ -576,12 +514,12 @@ mod tests {
     fn test_prefix_matching_with_id() {
         // Trailing "/" in the pattern should match paths with IDs
         assert!(requires_api_key_fallback(
-            "GET",
-            "/api/v2/rum/applications/some-uuid-here"
-        ));
-        assert!(requires_api_key_fallback(
             "DELETE",
             "/api/v2/api_keys/key-123"
+        ));
+        assert!(requires_api_key_fallback(
+            "GET",
+            "/api/v2/fleet/agents/agent-123"
         ));
     }
 
@@ -601,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_oauth_excluded_count() {
-        assert_eq!(OAUTH_EXCLUDED_ENDPOINTS.len(), 39);
+        assert_eq!(OAUTH_EXCLUDED_ENDPOINTS.len(), 24);
     }
 
     #[test]
@@ -670,10 +608,10 @@ mod tests {
     }
 
     #[test]
-    fn test_requires_api_key_fallback_notebooks() {
-        assert!(requires_api_key_fallback("GET", "/api/v1/notebooks"));
-        assert!(requires_api_key_fallback("GET", "/api/v1/notebooks/12345"));
-        assert!(requires_api_key_fallback("POST", "/api/v1/notebooks"));
+    fn test_no_fallback_for_notebooks() {
+        assert!(!requires_api_key_fallback("GET", "/api/v1/notebooks"));
+        assert!(!requires_api_key_fallback("GET", "/api/v1/notebooks/12345"));
+        assert!(!requires_api_key_fallback("POST", "/api/v1/notebooks"));
     }
 
     #[test]

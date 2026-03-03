@@ -104,6 +104,12 @@ pub fn default_scopes() -> Vec<&'static str> {
         // HAMR (disaster recovery)
         "disaster_recovery_status_read",
         "disaster_recovery_status_write",
+        // Notebooks
+        "notebooks_read",
+        "notebooks_write",
+        // RUM
+        "rum_generate_metrics",
+        "rum_session_replay_read",
     ]
 }
 
