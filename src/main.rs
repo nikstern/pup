@@ -4145,10 +4145,15 @@ enum NetworkActions {
         #[command(subcommand)]
         action: NetworkFlowActions,
     },
-    /// List network devices
+    /// Manage network devices
     Devices {
         #[command(subcommand)]
         action: NetworkDeviceActions,
+    },
+    /// Manage network interface tags
+    Interfaces {
+        #[command(subcommand)]
+        action: NetworkInterfaceTagActions,
     },
 }
 
@@ -4162,6 +4167,43 @@ enum NetworkFlowActions {
 enum NetworkDeviceActions {
     /// List network devices
     List,
+    /// Get device details
+    Get { device_id: String },
+    /// List interfaces for a device
+    Interfaces {
+        device_id: String,
+        #[arg(long, help = "Include IP addresses")]
+        ip_addresses: bool,
+    },
+    /// Manage device tags
+    Tags {
+        #[command(subcommand)]
+        action: NetworkDeviceTagActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum NetworkDeviceTagActions {
+    /// List tags for a device
+    List { device_id: String },
+    /// Update tags for a device
+    Update {
+        device_id: String,
+        #[arg(long, help = "JSON file with tags body (required)")]
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum NetworkInterfaceTagActions {
+    /// List tags for an interface
+    List { interface_id: String },
+    /// Update tags for an interface
+    Update {
+        interface_id: String,
+        #[arg(long, help = "JSON file with tags body (required)")]
+        file: String,
+    },
 }
 
 // ---- Obs Pipelines (placeholder) ----
@@ -4343,6 +4385,25 @@ enum ProductAnalyticsActions {
     Events {
         #[command(subcommand)]
         action: ProductAnalyticsEventActions,
+    },
+    /// Run product analytics queries
+    Query {
+        #[command(subcommand)]
+        action: ProductAnalyticsQueryActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProductAnalyticsQueryActions {
+    /// Compute scalar analytics
+    Scalar {
+        #[arg(long, help = "JSON file with query body (required)")]
+        file: String,
+    },
+    /// Compute timeseries analytics
+    Timeseries {
+        #[arg(long, help = "JSON file with query body (required)")]
+        file: String,
     },
 }
 
@@ -6463,19 +6524,51 @@ async fn main_inner() -> anyhow::Result<()> {
         }
         // --- Network (placeholder) ---
         Commands::Network { action } => match action {
-            NetworkActions::List => commands::network::list()?,
+            NetworkActions::List => anyhow::bail!("network commands are not yet implemented (API endpoints pending)"),
             NetworkActions::Flows { action } => match action {
                 NetworkFlowActions::List => {
                     cfg.validate_auth()?;
                     commands::network::flows_list(&cfg).await?;
                 }
             },
-            NetworkActions::Devices { action } => match action {
-                NetworkDeviceActions::List => {
-                    cfg.validate_auth()?;
-                    commands::network::devices_list(&cfg).await?;
+            NetworkActions::Devices { action } => {
+                cfg.validate_auth()?;
+                match action {
+                    NetworkDeviceActions::List => {
+                        commands::network::devices_list(&cfg).await?;
+                    }
+                    NetworkDeviceActions::Get { device_id } => {
+                        commands::network::devices_get(&cfg, &device_id).await?;
+                    }
+                    NetworkDeviceActions::Interfaces {
+                        device_id,
+                        ip_addresses,
+                    } => {
+                        commands::network::devices_interfaces(&cfg, &device_id, ip_addresses)
+                            .await?;
+                    }
+                    NetworkDeviceActions::Tags { action } => match action {
+                        NetworkDeviceTagActions::List { device_id } => {
+                            commands::network::devices_tags_list(&cfg, &device_id).await?;
+                        }
+                        NetworkDeviceTagActions::Update { device_id, file } => {
+                            commands::network::devices_tags_update(&cfg, &device_id, &file).await?;
+                        }
+                    },
                 }
-            },
+            }
+            NetworkActions::Interfaces { action } => {
+                cfg.validate_auth()?;
+                match action {
+                    NetworkInterfaceTagActions::List { interface_id } => {
+                        commands::network::interfaces_tags_list(&cfg, &interface_id).await?;
+                    }
+                    NetworkInterfaceTagActions::Update { interface_id, file } => {
+                        commands::network::interfaces_tags_update(&cfg, &interface_id, &file)
+                            .await?;
+                    }
+                }
+            }
         },
         // --- Obs Pipelines (placeholder) ---
         Commands::ObsPipelines { action } => match action {
@@ -6554,6 +6647,14 @@ async fn main_inner() -> anyhow::Result<()> {
                     ProductAnalyticsEventActions::Send { file, .. } => {
                         let f = file.unwrap_or_default();
                         commands::product_analytics::events_send(&cfg, &f).await?;
+                    }
+                },
+                ProductAnalyticsActions::Query { action } => match action {
+                    ProductAnalyticsQueryActions::Scalar { file } => {
+                        commands::product_analytics::query_scalar(&cfg, &file).await?;
+                    }
+                    ProductAnalyticsQueryActions::Timeseries { file } => {
+                        commands::product_analytics::query_timeseries(&cfg, &file).await?;
                     }
                 },
             }
