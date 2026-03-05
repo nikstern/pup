@@ -90,8 +90,7 @@ pub async fn devices_tags_list(cfg: &Config, device_id: &str) -> Result<()> {
 
 #[cfg(target_arch = "wasm32")]
 pub async fn devices_tags_list(cfg: &Config, device_id: &str) -> Result<()> {
-    let data =
-        crate::api::get(cfg, &format!("/api/v2/ndm/tags/devices/{device_id}"), &[]).await?;
+    let data = crate::api::get(cfg, &format!("/api/v2/ndm/tags/devices/{device_id}"), &[]).await?;
     crate::formatter::output(cfg, &data)
 }
 
@@ -109,12 +108,8 @@ pub async fn devices_tags_update(cfg: &Config, device_id: &str, file: &str) -> R
 #[cfg(target_arch = "wasm32")]
 pub async fn devices_tags_update(cfg: &Config, device_id: &str, file: &str) -> Result<()> {
     let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::patch(
-        cfg,
-        &format!("/api/v2/ndm/tags/devices/{device_id}"),
-        &body,
-    )
-    .await?;
+    let data =
+        crate::api::patch(cfg, &format!("/api/v2/ndm/tags/devices/{device_id}"), &body).await?;
     crate::formatter::output(cfg, &data)
 }
 

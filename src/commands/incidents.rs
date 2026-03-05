@@ -1,9 +1,10 @@
 use anyhow::{bail, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use datadog_api_client::datadogV2::api_incidents::{
-    CreateGlobalIncidentHandleOptionalParams, GetIncidentOptionalParams, ImportIncidentOptionalParams,
-    IncidentsAPI, ListGlobalIncidentHandlesOptionalParams, ListIncidentAttachmentsOptionalParams,
-    ListIncidentsOptionalParams, UpdateGlobalIncidentHandleOptionalParams,
+    CreateGlobalIncidentHandleOptionalParams, GetIncidentOptionalParams,
+    ImportIncidentOptionalParams, IncidentsAPI, ListGlobalIncidentHandlesOptionalParams,
+    ListIncidentAttachmentsOptionalParams, ListIncidentsOptionalParams,
+    UpdateGlobalIncidentHandleOptionalParams,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use datadog_api_client::datadogV2::model::IncidentImportRequest;

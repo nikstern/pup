@@ -59,8 +59,7 @@ pub async fn query_scalar(cfg: &Config, file: &str) -> Result<()> {
 #[cfg(target_arch = "wasm32")]
 pub async fn query_scalar(cfg: &Config, file: &str) -> Result<()> {
     let body: serde_json::Value = util::read_json_file(file)?;
-    let data =
-        crate::api::post(cfg, "/api/v2/product-analytics/analytics/scalar", &body).await?;
+    let data = crate::api::post(cfg, "/api/v2/product-analytics/analytics/scalar", &body).await?;
     crate::formatter::output(cfg, &data)
 }
 

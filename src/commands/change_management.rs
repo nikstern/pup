@@ -114,12 +114,9 @@ pub async fn delete_decision(
     decision_id: &str,
 ) -> Result<()> {
     let api = make_api(cfg);
-    api.delete_change_request_decision(
-        change_request_id.to_string(),
-        decision_id.to_string(),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("failed to delete change request decision: {e:?}"))?;
+    api.delete_change_request_decision(change_request_id.to_string(), decision_id.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to delete change request decision: {e:?}"))?;
     println!("Decision '{decision_id}' deleted.");
     Ok(())
 }
@@ -132,7 +129,9 @@ pub async fn delete_decision(
 ) -> Result<()> {
     crate::api::delete(
         cfg,
-        &format!("/api/v2/change-management/change-request/{change_request_id}/decisions/{decision_id}"),
+        &format!(
+            "/api/v2/change-management/change-request/{change_request_id}/decisions/{decision_id}"
+        ),
     )
     .await?;
     println!("Decision '{decision_id}' deleted.");
@@ -169,7 +168,9 @@ pub async fn update_decision(
     let body: serde_json::Value = util::read_json_file(file)?;
     let data = crate::api::patch(
         cfg,
-        &format!("/api/v2/change-management/change-request/{change_request_id}/decisions/{decision_id}"),
+        &format!(
+            "/api/v2/change-management/change-request/{change_request_id}/decisions/{decision_id}"
+        ),
         &body,
     )
     .await?;
