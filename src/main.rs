@@ -2309,6 +2309,7 @@ enum SyntheticsTestActions {
         start: i64,
     },
     /// Run synthetic tests via a local tunnel (requires DD_API_KEY + DD_APP_KEY)
+    #[cfg(not(target_arch = "wasm32"))]
     Run {
         /// Public IDs of tests to run (e.g. abc-def-ghi)
         public_ids: Vec<String>,
@@ -5622,6 +5623,7 @@ async fn main_inner() -> anyhow::Result<()> {
                     SyntheticsTestActions::Search { text, count, start } => {
                         commands::synthetics::tests_search(&cfg, text, count, start).await?;
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
                     SyntheticsTestActions::Run {
                         public_ids,
                         timeout,
