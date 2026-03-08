@@ -54,6 +54,7 @@ fn build_auth_headers(cfg: &Config) -> anyhow::Result<reqwest::header::HeaderMap
 pub async fn tests_run(
     cfg: &Config,
     public_ids: Vec<String>,
+    use_tunnel: bool,
     timeout_secs: u64,
     poll_interval_secs: u64,
 ) -> Result<()> {
@@ -65,47 +66,53 @@ pub async fn tests_run(
     let intake_url = synthetics_intake_base_url(cfg);
     let client = reqwest::Client::new();
 
-    eprintln!(
-        "Fetching tunnel presigned URL for {} test(s)...",
-        public_ids.len()
-    );
-    let query: Vec<(&str, &str)> = public_ids
-        .iter()
-        .map(|id| ("test_id", id.as_str()))
-        .collect();
-    let tunnel_resp = client
-        .get(format!("{intake_url}/synthetics/ci/tunnel"))
-        .query(&query)
-        .headers(auth_headers.clone())
-        .send()
-        .await?;
-    if !tunnel_resp.status().is_success() {
-        let status = tunnel_resp.status();
-        let body = tunnel_resp.text().await.unwrap_or_default();
-        anyhow::bail!("failed to get tunnel URL (HTTP {status}): {body}");
-    }
-    let tunnel_json: serde_json::Value = tunnel_resp.json().await?;
-    let presigned_url = tunnel_json["url"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing 'url' in tunnel response"))?
-        .to_string();
+    let active_tunnel = if use_tunnel {
+        eprintln!(
+            "Fetching tunnel presigned URL for {} test(s)...",
+            public_ids.len()
+        );
+        let query: Vec<(&str, &str)> = public_ids
+            .iter()
+            .map(|id| ("test_id", id.as_str()))
+            .collect();
+        let tunnel_resp = client
+            .get(format!("{intake_url}/synthetics/ci/tunnel"))
+            .query(&query)
+            .headers(auth_headers.clone())
+            .send()
+            .await?;
+        if !tunnel_resp.status().is_success() {
+            let status = tunnel_resp.status();
+            let body = tunnel_resp.text().await.unwrap_or_default();
+            anyhow::bail!("failed to get tunnel URL (HTTP {status}): {body}");
+        }
+        let tunnel_json: serde_json::Value = tunnel_resp.json().await?;
+        let presigned_url = tunnel_json["url"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing 'url' in tunnel response"))?
+            .to_string();
 
-    eprintln!("Starting tunnel...");
-    let (tunnel_info, tunnel) =
-        crate::tunnel::Tunnel::start(&presigned_url, public_ids.clone()).await?;
-    eprintln!("Tunnel connected (id: {})", tunnel_info.id);
+        eprintln!("Starting tunnel...");
+        let (tunnel_info, tunnel) =
+            crate::tunnel::Tunnel::start(&presigned_url, public_ids.clone()).await?;
+        eprintln!("Tunnel connected (id: {})", tunnel_info.id);
+        Some((tunnel_info, tunnel))
+    } else {
+        None
+    };
 
     let tests_payload: Vec<serde_json::Value> = public_ids
         .iter()
         .map(|id| {
-            serde_json::json!({
-                "public_id": id,
-                "tunnel": {
-                    "id": tunnel_info.id,
-                    "host": tunnel_info.host,
-                    "privateKey": tunnel_info.private_key,
-                }
-            })
+            let mut test = serde_json::json!({ "public_id": id });
+            if let Some((ref info, _)) = active_tunnel {
+                test["tunnel"] = serde_json::json!({
+                    "id": info.id,
+                    "host": info.host,
+                    "privateKey": info.private_key,
+                });
+            }
+            test
         })
         .collect();
     let trigger_payload = serde_json::json!({ "tests": tests_payload });
@@ -120,7 +127,9 @@ pub async fn tests_run(
     if !trigger_resp.status().is_success() {
         let status = trigger_resp.status();
         let body = trigger_resp.text().await.unwrap_or_default();
-        tunnel.stop();
+        if let Some((_, tunnel)) = active_tunnel {
+            tunnel.stop();
+        }
         anyhow::bail!("failed to trigger tests (HTTP {status}): {body}");
     }
     let trigger_json: serde_json::Value = trigger_resp.json().await?;
@@ -147,7 +156,9 @@ pub async fn tests_run(
         if !batch_resp.status().is_success() {
             let status = batch_resp.status();
             let body = batch_resp.text().await.unwrap_or_default();
-            tunnel.stop();
+            if let Some((_, tunnel)) = active_tunnel {
+                tunnel.stop();
+            }
             anyhow::bail!("failed to poll batch (HTTP {status}): {body}");
         }
         let batch_json: serde_json::Value = batch_resp.json().await?;
@@ -158,12 +169,16 @@ pub async fn tests_run(
             break batch_json;
         }
         if std::time::Instant::now() >= deadline {
-            tunnel.stop();
+            if let Some((_, tunnel)) = active_tunnel {
+                tunnel.stop();
+            }
             anyhow::bail!("timeout after {timeout_secs}s waiting for test results");
         }
     };
 
-    tunnel.stop();
+    if let Some((_, tunnel)) = active_tunnel {
+        tunnel.stop();
+    }
     formatter::output(cfg, &final_result)
 }
 
