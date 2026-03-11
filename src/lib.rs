@@ -20,6 +20,8 @@ mod config;
 #[cfg(feature = "browser")]
 mod formatter;
 #[cfg(feature = "browser")]
+mod rtk;
+#[cfg(feature = "browser")]
 mod version;
 
 #[cfg(feature = "browser")]
