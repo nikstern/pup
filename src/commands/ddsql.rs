@@ -13,8 +13,8 @@ fn build_request(
     from: &str,
     to: &str,
     interval: Option<i64>,
-    limit: Option<i64>,
-    offset: Option<i64>,
+    limit: Option<i32>,
+    offset: Option<i32>,
 ) -> Result<Value> {
     let default_start =
         util::parse_time_to_unix_millis(from).map_err(|e| anyhow!("invalid --from: {e}"))?;
@@ -52,8 +52,8 @@ pub async fn table(
     from: &str,
     to: &str,
     interval: Option<i64>,
-    limit: Option<i64>,
-    offset: Option<i64>,
+    limit: Option<i32>,
+    offset: Option<i32>,
 ) -> Result<()> {
     let body = build_request(
         "ddsql_table_request",
@@ -74,8 +74,8 @@ pub async fn csv(
     from: &str,
     to: &str,
     interval: Option<i64>,
-    limit: Option<i64>,
-    offset: Option<i64>,
+    limit: Option<i32>,
+    offset: Option<i32>,
 ) -> Result<()> {
     let body = build_request(
         "ddsql_table_request",

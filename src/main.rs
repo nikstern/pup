@@ -2507,9 +2507,9 @@ enum DdsqlActions {
         #[arg(long, help = "Aggregation interval in milliseconds (default: 60000)")]
         interval: Option<i64>,
         #[arg(long, default_value_t = 50, help = "Maximum number of rows to return")]
-        limit: i64,
+        limit: i32,
         #[arg(long, help = "Number of rows to skip (for pagination)")]
-        offset: Option<i64>,
+        offset: Option<i32>,
     },
     /// Execute DDSQL query and return CSV (all rows by default)
     Csv {
@@ -2522,9 +2522,9 @@ enum DdsqlActions {
         #[arg(long, help = "Aggregation interval in milliseconds (default: 60000)")]
         interval: Option<i64>,
         #[arg(long, help = "Maximum number of rows to return (default: all)")]
-        limit: Option<i64>,
+        limit: Option<i32>,
         #[arg(long, help = "Number of rows to skip (for pagination)")]
-        offset: Option<i64>,
+        offset: Option<i32>,
     },
     /// Execute DDSQL query and return time series data
     #[command(name = "time-series")]
