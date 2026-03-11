@@ -107,7 +107,7 @@ pub fn format_and_print<T: Serialize>(
 
 /// Convenience: format and print using config settings (respects -o flag and agent mode).
 pub fn output<T: Serialize>(cfg: &crate::config::Config, data: &T) -> Result<()> {
-    let compress_cfg = compress_cfg_from(cfg);
+    let compress_cfg = compress_cfg_from(cfg, None);
     format_and_print(
         data,
         &cfg.output_format,
@@ -118,12 +118,19 @@ pub fn output<T: Serialize>(cfg: &crate::config::Config, data: &T) -> Result<()>
 }
 
 /// Build a `CompressConfig` from runtime config, or `None` if compact mode is disabled.
-pub fn compress_cfg_from(cfg: &crate::config::Config) -> Option<rtk::CompressConfig> {
+///
+/// `command` selects a per-command field projector (e.g. `"monitors list"` strips the
+/// bulky options object; `"logs search"` flattens the nested attributes wrapper).
+pub fn compress_cfg_from(
+    cfg: &crate::config::Config,
+    command: Option<&str>,
+) -> Option<rtk::CompressConfig> {
     if cfg.compact_mode {
         Some(rtk::CompressConfig {
             string_trunc: cfg.compact_string_trunc,
             array_items_top: cfg.compact_array_top,
             array_items_nested: cfg.compact_array_nested,
+            project: command.and_then(rtk::projection_for_command),
         })
     } else {
         None

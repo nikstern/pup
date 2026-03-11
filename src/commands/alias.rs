@@ -49,7 +49,7 @@ pub fn list(cfg: &crate::config::Config) -> Result<()> {
                 &items,
                 &cfg.output_format,
                 cfg.agent_mode,
-                crate::formatter::compress_cfg_from(cfg).as_ref(),
+                crate::formatter::compress_cfg_from(cfg, None).as_ref(),
                 None,
             )?;
         }

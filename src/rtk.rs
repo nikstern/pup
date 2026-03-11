@@ -11,7 +11,7 @@
 use serde_json::Value;
 
 /// Tunable parameters for JSON compression.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompressConfig {
     /// Truncate strings longer than this many bytes (default: 200).
     pub string_trunc: usize,
@@ -19,6 +19,10 @@ pub struct CompressConfig {
     pub array_items_top: usize,
     /// Max items to show from nested arrays, e.g. tags (default: 10).
     pub array_items_nested: usize,
+    /// Optional projection applied to each top-level item before compression.
+    /// For arrays, called on every element; for single objects, called on the object itself.
+    /// Use this to keep only relevant fields for a specific command (e.g. monitors, logs).
+    pub project: Option<fn(&Value) -> Value>,
 }
 
 impl Default for CompressConfig {
@@ -27,16 +31,127 @@ impl Default for CompressConfig {
             string_trunc: 200,
             array_items_top: 20,
             array_items_nested: 10,
+            project: None,
         }
     }
 }
 
-/// Compress a JSON string: strip nulls, truncate long strings, sample large arrays.
-/// Returns compact (non-pretty) JSON so the caller controls formatting.
+/// Compress a JSON string: project to relevant fields, strip nulls, truncate long strings,
+/// sample large arrays. Returns compact (non-pretty) JSON so the caller controls formatting.
 pub fn compress_json_string(json_str: &str, cfg: &CompressConfig) -> anyhow::Result<String> {
     let value: Value = serde_json::from_str(json_str)?;
-    let compressed = compress_value(&value, 0, cfg);
+    let projected = project_value(&value, cfg);
+    let compressed = compress_value(&projected, 0, cfg);
     Ok(serde_json::to_string(&compressed)?)
+}
+
+/// Apply the projection function to each top-level item (or the item itself if not an array).
+fn project_value(value: &Value, cfg: &CompressConfig) -> Value {
+    let f = match cfg.project {
+        Some(f) => f,
+        None => return value.clone(),
+    };
+    match value {
+        Value::Array(arr) => Value::Array(arr.iter().map(f).collect()),
+        other => f(other),
+    }
+}
+
+/// Keep only the specified top-level keys from an object. Passes non-objects through unchanged.
+fn keep_fields(v: &Value, fields: &[&str]) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for &field in fields {
+                if let Some(val) = map.get(field) {
+                    out.insert(field.to_owned(), val.clone());
+                }
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-command projectors
+// ---------------------------------------------------------------------------
+
+/// Monitor: keep actionable fields, drop the bulky options object.
+pub fn project_monitor(v: &Value) -> Value {
+    keep_fields(
+        v,
+        &[
+            "id",
+            "name",
+            "overall_state",
+            "type",
+            "query",
+            "message",
+            "tags",
+            "creator",
+            "modified",
+        ],
+    )
+}
+
+/// Log: flatten the nested attributes wrapper to a flat, scannable object.
+pub fn project_log(v: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(id) = v.get("id") {
+        out.insert("id".into(), id.clone());
+    }
+    if let Some(attrs) = v.get("attributes") {
+        for &field in &["timestamp", "message", "service", "status", "host", "tags"] {
+            if let Some(val) = attrs.get(field) {
+                out.insert(field.into(), val.clone());
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+/// Span: flatten attributes to a flat object, dropping the verbose `custom` bag.
+pub fn project_span(v: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(id) = v.get("id") {
+        out.insert("id".into(), id.clone());
+    }
+    if let Some(attrs) = v.get("attributes") {
+        for &field in &[
+            "trace_id",
+            "span_id",
+            "service",
+            "operation_name",
+            "resource_name",
+            "status",
+            "start_timestamp",
+            "end_timestamp",
+            "env",
+            "host",
+        ] {
+            if let Some(val) = attrs.get(field) {
+                out.insert(field.into(), val.clone());
+            }
+        }
+        // Include error type if present, without the full stack trace.
+        if let Some(err) = attrs.get("error") {
+            if let Some(t) = err.get("type") {
+                out.insert("error_type".into(), t.clone());
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+/// Return the projection function for a given pup command string, if one exists.
+pub fn projection_for_command(command: &str) -> Option<fn(&Value) -> Value> {
+    match command {
+        "monitors list" | "monitors get" => Some(project_monitor),
+        "logs search" => Some(project_log),
+        "traces search" | "traces aggregate" => Some(project_span),
+        _ => None,
+    }
 }
 
 fn compress_value(value: &Value, depth: u8, cfg: &CompressConfig) -> Value {
@@ -267,6 +382,7 @@ mod tests {
             string_trunc: 10,
             array_items_top: 2,
             array_items_nested: 1,
+            project: None,
         };
         // String truncation at 10 chars
         let c = compress_value(&Value::String("hello world!".into()), 0, &cfg);
@@ -281,6 +397,137 @@ mod tests {
         let arr: Vec<Value> = (0..5).map(|i| serde_json::json!(i)).collect();
         let c = compress_value(&Value::Array(arr), 1, &cfg);
         assert_eq!(c.as_array().unwrap().len(), 2); // 1 item + sentinel
+    }
+
+    // --- projector tests ---
+
+    #[test]
+    fn test_project_monitor_keeps_key_fields() {
+        let monitor = serde_json::json!({
+            "id": 123,
+            "name": "High CPU",
+            "overall_state": "Alert",
+            "type": "metric alert",
+            "query": "avg(last_5m):avg:system.cpu.user{*} > 90",
+            "message": "CPU is high",
+            "tags": ["env:prod"],
+            "creator": {"email": "a@b.com", "handle": "alice", "id": 9876},
+            "modified": "2024-03-11",
+            "options": {"avalanche_window": 10, "include_tags": true, "thresholds": {"critical": 90.0}},
+            "org_id": 2,
+            "multi": false,
+            "matching_downtimes": [],
+        });
+        let projected = project_monitor(&monitor);
+        let m = projected.as_object().unwrap();
+        assert!(m.contains_key("id"));
+        assert!(m.contains_key("name"));
+        assert!(m.contains_key("overall_state"));
+        assert!(m.contains_key("query"));
+        assert!(m.contains_key("creator"));
+        assert!(!m.contains_key("options"), "options should be stripped");
+        assert!(!m.contains_key("org_id"), "org_id should be stripped");
+        assert!(!m.contains_key("multi"), "multi should be stripped");
+        assert!(
+            !m.contains_key("matching_downtimes"),
+            "matching_downtimes should be stripped"
+        );
+    }
+
+    #[test]
+    fn test_project_log_flattens_attributes() {
+        let log = serde_json::json!({
+            "id": "abc123",
+            "type": "log",
+            "attributes": {
+                "timestamp": "2026-03-11T17:00:00Z",
+                "message": "something failed",
+                "service": "my-service",
+                "status": "error",
+                "host": "host-1",
+                "tags": ["env:prod"],
+                "attributes": {"caller": "main.go:42", "level": "ERROR"}
+            }
+        });
+        let projected = project_log(&log);
+        let m = projected.as_object().unwrap();
+        assert_eq!(m["id"].as_str().unwrap(), "abc123");
+        assert_eq!(m["message"].as_str().unwrap(), "something failed");
+        assert_eq!(m["service"].as_str().unwrap(), "my-service");
+        assert_eq!(m["status"].as_str().unwrap(), "error");
+        assert_eq!(m["host"].as_str().unwrap(), "host-1");
+        assert!(
+            !m.contains_key("attributes"),
+            "nested custom attributes should be stripped"
+        );
+        assert!(!m.contains_key("type"), "type wrapper should be stripped");
+    }
+
+    #[test]
+    fn test_project_span_flattens_attributes() {
+        let span = serde_json::json!({
+            "id": "span1",
+            "type": "spans",
+            "attributes": {
+                "trace_id": "abc",
+                "span_id": "def",
+                "service": "api",
+                "operation_name": "http.request",
+                "resource_name": "GET /health",
+                "status": "error",
+                "start_timestamp": "2026-03-11T17:00:00Z",
+                "end_timestamp": "2026-03-11T17:00:01Z",
+                "env": "prod",
+                "host": "host-1",
+                "error": {"type": "RuntimeError", "message": "oops", "stack": "long stack..."},
+                "custom": {"lots": "of", "verbose": "fields"}
+            }
+        });
+        let projected = project_span(&span);
+        let m = projected.as_object().unwrap();
+        assert_eq!(m["service"].as_str().unwrap(), "api");
+        assert_eq!(m["status"].as_str().unwrap(), "error");
+        assert_eq!(m["error_type"].as_str().unwrap(), "RuntimeError");
+        assert!(!m.contains_key("custom"), "custom bag should be stripped");
+    }
+
+    #[test]
+    fn test_projection_for_command_routing() {
+        assert!(projection_for_command("monitors list").is_some());
+        assert!(projection_for_command("monitors get").is_some());
+        assert!(projection_for_command("logs search").is_some());
+        assert!(projection_for_command("traces search").is_some());
+        assert!(projection_for_command("traces aggregate").is_some());
+        assert!(projection_for_command("dashboards list").is_none());
+        assert!(projection_for_command("unknown").is_none());
+    }
+
+    #[test]
+    fn test_compress_with_projection_via_config() {
+        let monitor = serde_json::json!([{
+            "id": 1,
+            "name": "test",
+            "overall_state": "OK",
+            "type": "metric alert",
+            "query": "avg(last_5m):avg:system.cpu.user{*} > 90",
+            "message": "ok",
+            "options": {"avalanche_window": 10, "thresholds": {"critical": 90.0}},
+            "org_id": 2,
+        }]);
+        let cfg = CompressConfig {
+            project: Some(project_monitor),
+            ..Default::default()
+        };
+        let compressed =
+            compress_json_string(&serde_json::to_string(&monitor).unwrap(), &cfg).unwrap();
+        let result: Value = serde_json::from_str(&compressed).unwrap();
+        let item = &result[0];
+        assert!(item.get("id").is_some());
+        assert!(
+            item.get("options").is_none(),
+            "options stripped by projector"
+        );
+        assert!(item.get("org_id").is_none(), "org_id stripped by projector");
     }
 
     // --- extract_schema tests (RTK port) ---
