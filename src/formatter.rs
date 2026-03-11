@@ -133,7 +133,7 @@ pub fn compress_cfg_from(
             array_items_nested: cfg.compact_array_nested,
             flatten: command.and_then(rtk::flatten_for_command),
             field_weights: command.and_then(rtk::weights_for_command),
-            per_item_token_budget: 300,
+            per_item_token_budget: 150,
         })
     } else {
         None

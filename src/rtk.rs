@@ -160,7 +160,11 @@ pub struct CompressConfig {
     /// Token-budget-aware field selection applied to each top-level item.
     /// Fields are scored by importance ÷ token_cost and filled greedily.
     pub field_weights: Option<&'static FieldWeights>,
-    /// Approximate token budget per top-level object item (default: 300 ≈ 1200 chars).
+    /// Approximate token budget per top-level object item (default: 150 ≈ 600 chars).
+    /// Tune this to match desired compression aggressiveness:
+    ///   ~100 tokens → only must-have fields survive
+    ///   ~150 tokens → MCP-like density (options/org_id dropped for monitors)
+    ///   ~300 tokens → relaxed (most fields survive; only very bulky ones dropped)
     pub per_item_token_budget: usize,
 }
 
@@ -172,7 +176,7 @@ impl Default for CompressConfig {
             array_items_nested: 10,
             flatten: None,
             field_weights: None,
-            per_item_token_budget: 300,
+            per_item_token_budget: 150,
         }
     }
 }
