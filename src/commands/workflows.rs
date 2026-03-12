@@ -13,28 +13,30 @@ use crate::formatter::{self, Metadata};
 use crate::util;
 
 // ---------------------------------------------------------------------------
+// Helper: build a WorkflowAutomationAPI with bearer-token support
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+fn make_api(cfg: &Config) -> WorkflowAutomationAPI {
+    let dd_cfg = client::make_dd_config(cfg);
+    match client::make_bearer_client(cfg) {
+        Some(c) => WorkflowAutomationAPI::with_client_and_config(dd_cfg, c),
+        None => WorkflowAutomationAPI::with_config(dd_cfg),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Workflow CRUD
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn get(cfg: &Config, workflow_id: &str) -> Result<()> {
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
     let resp = api
         .get_workflow(workflow_id.to_string())
         .await
         .map_err(|e| anyhow::anyhow!("failed to get workflow: {:?}", e))?;
-    let meta = Metadata {
-        count: None,
-        truncated: false,
-        command: Some("workflows get".to_string()),
-        next_action: None,
-    };
-    formatter::format_and_print(&resp, &cfg.output_format, cfg.agent_mode, Some(&meta))
+    formatter::output(cfg, &resp)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -47,12 +49,7 @@ pub async fn get(cfg: &Config, workflow_id: &str) -> Result<()> {
 pub async fn create(cfg: &Config, file: &str) -> Result<()> {
     let body: datadog_api_client::datadogV2::model::CreateWorkflowRequest =
         util::read_json_file(file)?;
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
     let resp = api
         .create_workflow(body)
         .await
@@ -71,12 +68,7 @@ pub async fn create(cfg: &Config, file: &str) -> Result<()> {
 pub async fn update(cfg: &Config, workflow_id: &str, file: &str) -> Result<()> {
     let body: datadog_api_client::datadogV2::model::UpdateWorkflowRequest =
         util::read_json_file(file)?;
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
     let resp = api
         .update_workflow(workflow_id.to_string(), body)
         .await
@@ -93,12 +85,7 @@ pub async fn update(cfg: &Config, workflow_id: &str, file: &str) -> Result<()> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn delete(cfg: &Config, workflow_id: &str) -> Result<()> {
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
     api.delete_workflow(workflow_id.to_string())
         .await
         .map_err(|e| anyhow::anyhow!("failed to delete workflow: {:?}", e))?;
@@ -160,13 +147,7 @@ pub async fn run(
         .map_err(|e| anyhow::anyhow!("failed to execute workflow: {:?}", e))?;
 
     if !wait {
-        let meta = Metadata {
-            count: None,
-            truncated: false,
-            command: Some("workflows run".to_string()),
-            next_action: None,
-        };
-        formatter::format_and_print(&response, &cfg.output_format, cfg.agent_mode, Some(&meta))?;
+        formatter::output(cfg, &response)?;
         return Ok(());
     }
 
@@ -209,18 +190,7 @@ pub async fn run(
 
         match state {
             "COMPLETED" | "FAILED" | "CANCELED" | "CANCELLED" | "ERROR" => {
-                let meta = Metadata {
-                    count: None,
-                    truncated: false,
-                    command: Some("workflows run".to_string()),
-                    next_action: None,
-                };
-                formatter::format_and_print(
-                    &status,
-                    &cfg.output_format,
-                    cfg.agent_mode,
-                    Some(&meta),
-                )?;
+                formatter::output(cfg, &status)?;
                 return Ok(());
             }
             _ => continue,
@@ -269,12 +239,7 @@ pub async fn run(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn instance_list(cfg: &Config, workflow_id: &str, limit: i64, page: i64) -> Result<()> {
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
 
     let mut params = ListWorkflowInstancesOptionalParams::default();
     params = params.page_size(limit.clamp(1, 100));
@@ -315,23 +280,12 @@ pub async fn instance_list(cfg: &Config, workflow_id: &str, limit: i64, page: i6
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn instance_get(cfg: &Config, workflow_id: &str, instance_id: &str) -> Result<()> {
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
     let resp = api
         .get_workflow_instance(workflow_id.to_string(), instance_id.to_string())
         .await
         .map_err(|e| anyhow::anyhow!("failed to get workflow instance: {:?}", e))?;
-    let meta = Metadata {
-        count: None,
-        truncated: false,
-        command: Some("workflows instances get".to_string()),
-        next_action: None,
-    };
-    formatter::format_and_print(&resp, &cfg.output_format, cfg.agent_mode, Some(&meta))
+    formatter::output(cfg, &resp)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -347,23 +301,12 @@ pub async fn instance_get(cfg: &Config, workflow_id: &str, instance_id: &str) ->
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn instance_cancel(cfg: &Config, workflow_id: &str, instance_id: &str) -> Result<()> {
-    let dd_cfg = client::make_dd_config(cfg);
-    let api = if let Some(http_client) = client::make_bearer_client(cfg) {
-        WorkflowAutomationAPI::with_client_and_config(dd_cfg, http_client)
-    } else {
-        WorkflowAutomationAPI::with_config(dd_cfg)
-    };
+    let api = make_api(cfg);
     let resp = api
         .cancel_workflow_instance(workflow_id.to_string(), instance_id.to_string())
         .await
         .map_err(|e| anyhow::anyhow!("failed to cancel workflow instance: {:?}", e))?;
-    let meta = Metadata {
-        count: None,
-        truncated: false,
-        command: Some("workflows instances cancel".to_string()),
-        next_action: None,
-    };
-    formatter::format_and_print(&resp, &cfg.output_format, cfg.agent_mode, Some(&meta))
+    formatter::output(cfg, &resp)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -382,9 +325,12 @@ pub async fn instance_cancel(cfg: &Config, workflow_id: &str, instance_id: &str)
 // ---------------------------------------------------------------------------
 
 fn parse_duration(input: &str) -> Result<std::time::Duration> {
+    use std::sync::LazyLock;
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)^(\d+)\s*(s|m|h)$").unwrap());
+
     let input = input.trim();
-    let re = regex::Regex::new(r"(?i)^(\d+)\s*(s|m|h)$").unwrap();
-    if let Some(caps) = re.captures(input) {
+    if let Some(caps) = RE.captures(input) {
         let num: u64 = caps[1].parse()?;
         let secs = match caps[2].to_lowercase().as_str() {
             "s" => num,
