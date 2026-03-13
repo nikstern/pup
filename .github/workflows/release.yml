@@ -43,6 +43,9 @@ jobs:
     name: Windows Build
     needs: goreleaser
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v6
         with:
@@ -51,19 +54,15 @@ jobs:
         run: |
           choco install nasm -y
           echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
-        shell: bash
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-        shell: bash
       - name: Build
         run: cargo build --release
-        shell: bash
       - name: Get version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-        shell: bash
       - name: Package
         run: |
           mkdir -p staging
@@ -73,9 +72,7 @@ jobs:
           cp README.md staging/
           cd staging
           7z a "../pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip" .
-        shell: bash
       - name: Upload to release
         run: gh release upload "$GITHUB_REF_NAME" "pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash

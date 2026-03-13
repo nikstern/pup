@@ -189,6 +189,9 @@ jobs:
   windows:
     name: Windows Build & Test
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v6
       - uses: actions/cache@v5
@@ -204,21 +207,16 @@ jobs:
         run: |
           choco install nasm -y
           echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
-        shell: bash
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-        shell: bash
       - name: Build
         run: cargo build --release
-        shell: bash
       - name: Run tests
         run: cargo test --verbose -- --test-threads=1
-        shell: bash
       - name: Report binary size
         run: ls -lh target/release/pup.exe
-        shell: bash
 
   wasm:
     name: WASM (WASI + Browser)
