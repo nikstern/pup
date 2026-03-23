@@ -410,6 +410,7 @@ async fn stream_lassie_to_acp(
     let mut buffer = String::new();
     let mut lassie_run_id = String::new();
     let mut message_started = false;
+    let mut run_completed = false;
     let mut full_text = String::new();
     let mut bytes_stream = resp.bytes_stream();
 
@@ -428,7 +429,8 @@ async fn stream_lassie_to_acp(
 
                 // [DONE] marks end of SSE stream
                 if data_str.trim() == "[DONE]" {
-                    if message_started {
+                    // Only emit run_completed here if stop_reason didn't already send it
+                    if message_started && !run_completed {
                         write_sse_event(
                             writer,
                             "run_completed",
@@ -541,6 +543,7 @@ async fn stream_lassie_to_acp(
                             }),
                         )
                         .await?;
+                        run_completed = true;
 
                         // Don't return yet — wait for [DONE] to cleanly close
                     }
@@ -552,7 +555,7 @@ async fn stream_lassie_to_acp(
     }
 
     // Stream closed without [DONE] — emit completion if we got any content
-    if message_started {
+    if message_started && !run_completed {
         write_sse_event(
             writer,
             "run_completed",
