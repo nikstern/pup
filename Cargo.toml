@@ -52,7 +52,6 @@ wasi = [
     "dep:clap_complete",
     "tokio/rt",
     "tokio/macros",
-    "reqwest/rustls-tls",
 ]
 vendored-openssl = ["dep:openssl"]
 browser = [
