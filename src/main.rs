@@ -5896,6 +5896,24 @@ async fn main_inner() -> anyhow::Result<()> {
 
     let matches = Cli::command().get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+
+    // Handle commands that do not require authentication before Config::from_env() so
+    // that sourcing completions in a shell rc (e.g. `source <(pup completions bash)`)
+    // never triggers a token refresh or prints auth-related messages.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Commands::Completions { shell, install } = cli.command {
+        if install {
+            commands::completions::install(shell)?;
+        } else {
+            commands::completions::generate(shell);
+        }
+        return Ok(());
+    }
+    if let Commands::Version = cli.command {
+        println!("{}", version::build_info());
+        return Ok(());
+    }
+
     let mut cfg = config::Config::from_env()?;
 
     // Apply flag overrides
