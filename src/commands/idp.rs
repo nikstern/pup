@@ -239,11 +239,7 @@ async fn fetch_on_call(cfg: &Config, team_id: &str) -> Option<OnCallInfo> {
         .and_then(|r| r.get("responders"))
         .and_then(|r| r.get("data"))
         .and_then(|d| d.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| str_attr(r, "id"))
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(|r| str_attr(r, "id")).collect())
         .unwrap_or_default();
 
     // Escalation responders (secondary, tertiary, etc.)
@@ -287,7 +283,10 @@ async fn fetch_on_call(cfg: &Config, team_id: &str) -> Option<OnCallInfo> {
 
     // Primary responders
     for uid in &primary_ids {
-        if let Some(user) = users.iter().find(|u| str_attr(u, "id").as_deref() == Some(uid)) {
+        if let Some(user) = users
+            .iter()
+            .find(|u| str_attr(u, "id").as_deref() == Some(uid))
+        {
             let attrs = &user["attributes"];
             responders.push(OnCallResponder {
                 name: str_attr(attrs, "name").unwrap_or_default(),
@@ -302,7 +301,10 @@ async fn fetch_on_call(cfg: &Config, team_id: &str) -> Option<OnCallInfo> {
         if primary_ids.contains(uid) {
             continue; // already listed as primary
         }
-        if let Some(user) = users.iter().find(|u| str_attr(u, "id").as_deref() == Some(uid)) {
+        if let Some(user) = users
+            .iter()
+            .find(|u| str_attr(u, "id").as_deref() == Some(uid))
+        {
             let attrs = &user["attributes"];
             responders.push(OnCallResponder {
                 name: str_attr(attrs, "name").unwrap_or_default(),
@@ -320,8 +322,7 @@ async fn fetch_on_call(cfg: &Config, team_id: &str) -> Option<OnCallInfo> {
 }
 
 fn extract_health(attrs: &serde_json::Value) -> HealthSummary {
-    let status =
-        str_attr(attrs, "service_health_status").unwrap_or_else(|| "unknown".to_string());
+    let status = str_attr(attrs, "service_health_status").unwrap_or_else(|| "unknown".to_string());
     HealthSummary {
         status,
         monitors: MonitorCounts {
@@ -389,11 +390,7 @@ fn compute_metadata_gaps(
     gaps
 }
 
-fn compute_next_actions(
-    entity_name: &str,
-    health: &HealthSummary,
-    gaps: &[String],
-) -> Vec<String> {
+fn compute_next_actions(entity_name: &str, health: &HealthSummary, gaps: &[String]) -> Vec<String> {
     let mut actions = Vec::new();
 
     if health.monitors.alert > 0 || health.incidents.active > 0 {
@@ -411,9 +408,7 @@ fn compute_next_actions(
         actions.push(format!("Fill metadata gaps: {gap_list}"));
     }
     actions.push(format!("View dependencies: `pup idp deps {entity_name}`"));
-    actions.push(format!(
-        "Get owner details: `pup idp owner {entity_name}`"
-    ));
+    actions.push(format!("Get owner details: `pup idp owner {entity_name}`"));
 
     actions
 }
@@ -461,9 +456,7 @@ fn parse_dependencies(deps_data: &serde_json::Value, entity: &str) -> (Vec<Strin
 
 fn entity_query_url(entity: &str, include: &str) -> String {
     let query = url_encode(&format!("kind:service AND name:{entity}"));
-    let mut url = format!(
-        "/api/v2/idp/entity_graph/entities?query={query}&page%5Blimit%5D=1"
-    );
+    let mut url = format!("/api/v2/idp/entity_graph/entities?query={query}&page%5Blimit%5D=1");
     if !include.is_empty() {
         url.push_str(&format!("&include={include}"));
     }
@@ -646,8 +639,8 @@ pub async fn deps(cfg: &Config, entity: &str) -> Result<()> {
 
 /// Register a service definition from a YAML file.
 pub async fn register(cfg: &Config, file: &str) -> Result<()> {
-    let content = std::fs::read_to_string(file)
-        .map_err(|e| anyhow::anyhow!("failed to read {file}: {e}"))?;
+    let content =
+        std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("failed to read {file}: {e}"))?;
 
     // Parse YAML to JSON for the API
     let yaml_value: serde_json::Value = serde_yaml::from_str(&content)
@@ -673,4 +666,3 @@ pub async fn register(cfg: &Config, file: &str) -> Result<()> {
 
     formatter::format_and_print(&data, &cfg.output_format, cfg.agent_mode, Some(&meta))
 }
-
