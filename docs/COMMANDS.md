@@ -55,7 +55,7 @@ pup <domain> <subgroup> <action> [options] # Nested commands
 | product-analytics | events send | src/commands/product_analytics.rs | ✅ |
 | data-governance | scanner-rules (list) | src/commands/data_governance.rs | ✅ |
 | obs-pipelines | list, get, create, update, delete, validate | src/commands/obs_pipelines.rs | ✅ |
-| llm-obs | projects (create, list), experiments (create, list, update, delete), datasets (create, list) | src/commands/llm_obs.rs | ✅ |
+| llm-obs | projects (create, list), experiments (create, list, update, delete, summary, events (list, get), metric-values, dimension-values), datasets (create, list), spans (search) | src/commands/llm_obs.rs | ✅ |
 | reference-tables | list, get, create, batch-query | src/commands/reference_tables.rs | ✅ |
 | network | flows list, devices (list, get, interfaces, tags), interfaces (list, update) | src/commands/network.rs | ✅ |
 | cloud | aws, gcp, azure, oci | src/commands/cloud.rs | ✅ |
@@ -183,7 +183,7 @@ pup infrastructure hosts list
 
 ### Configuration & Data Management
 - **obs-pipelines** - Observability pipelines (list, get, create, update, delete, validate)
-- **llm-obs** - LLM Observability (projects, experiments, datasets)
+- **llm-obs** - LLM Observability (projects, experiments, datasets, spans)
 - **reference-tables** - Reference tables for log enrichment (list, get, create, batch-query)
 - **misc** - Miscellaneous (ip-ranges, status)
 - **product-analytics** - Product analytics events (send, query scalar/timeseries)
@@ -225,7 +225,7 @@ Available on all commands:
 
 ### v0.28.0 — New Command Groups and Full Pipeline Implementation
 
-- ✅ **llm-obs** (new) — LLM Observability: projects (create, list), experiments (create, list, update, delete), datasets (create, list)
+- ✅ **llm-obs** (new) — LLM Observability: projects (create, list), experiments (create, list, update, delete, summary, events (list, get), metric-values, dimension-values), datasets (create, list), spans (search)
 - ✅ **reference-tables** (new) — Reference table management (list, get, create, batch-query)
 - ✅ **obs-pipelines** (upgraded from placeholder) — Full CRUD: list, get, create, update, delete, validate
 - **cost** — Added cloud cost configs: `aws-config`, `azure-config`, `gcp-config` (list, get, create, delete each)

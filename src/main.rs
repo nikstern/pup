@@ -4999,6 +4999,11 @@ enum LlmObsActions {
         #[command(subcommand)]
         action: LlmObsDatasetsActions,
     },
+    /// Search LLM Observability spans
+    Spans {
+        #[command(subcommand)]
+        action: LlmObsSpansActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5036,6 +5041,93 @@ enum LlmObsExperimentsActions {
     Delete {
         #[arg(long, help = "JSON file with experiment IDs to delete (required)")]
         file: String,
+    },
+    /// Get a summary of an experiment (event counts, metrics, available dimensions)
+    Summary { experiment_id: String },
+    /// Query events from an experiment with optional filtering and sorting
+    Events {
+        #[command(subcommand)]
+        action: LlmObsExperimentsEventsActions,
+    },
+    /// Get metric stats for an experiment, optionally segmented by a dimension
+    #[command(name = "metric-values")]
+    MetricValues {
+        experiment_id: String,
+        #[arg(long, help = "Metric label to query (required)")]
+        metric_label: String,
+        #[arg(long, help = "Dimension to segment results by")]
+        segment_by_dimension: Option<String>,
+        #[arg(long, help = "Filter to a specific dimension value")]
+        segment_dimension_value: Option<String>,
+    },
+    /// Get unique values for a dimension across experiment events
+    #[command(name = "dimension-values")]
+    DimensionValues {
+        experiment_id: String,
+        #[arg(long, help = "Dimension key to enumerate values for (required)")]
+        dimension_key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmObsExperimentsEventsActions {
+    /// List events for an experiment with optional filtering and sorting
+    List {
+        experiment_id: String,
+        #[arg(long, default_value = "20", help = "Number of events to return")]
+        limit: u32,
+        #[arg(long, default_value = "0", help = "Offset for pagination")]
+        offset: u32,
+        #[arg(long, help = "Filter by dimension key")]
+        filter_dimension_key: Option<String>,
+        #[arg(
+            long,
+            help = "Filter by dimension value (use with --filter-dimension-key)"
+        )]
+        filter_dimension_value: Option<String>,
+        #[arg(long, help = "Filter by metric label")]
+        filter_metric_label: Option<String>,
+        #[arg(long, help = "Sort by metric label")]
+        sort_by_metric: Option<String>,
+        #[arg(long, default_value = "desc", help = "Sort direction: asc or desc")]
+        sort_direction: String,
+    },
+    /// Get a single event from an experiment by ID
+    Get {
+        experiment_id: String,
+        event_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmObsSpansActions {
+    /// Search LLM Observability spans
+    Search {
+        #[arg(long, help = "Search query string")]
+        query: Option<String>,
+        #[arg(long, help = "Filter by trace ID")]
+        trace_id: Option<String>,
+        #[arg(long, help = "Filter by span ID")]
+        span_id: Option<String>,
+        #[arg(
+            long,
+            help = "Filter by span kind (llm, retrieval, embedding, agent, tool, task, workflow)"
+        )]
+        span_kind: Option<String>,
+        #[arg(long, help = "Filter by span name")]
+        span_name: Option<String>,
+        #[arg(long, help = "Filter by ML app name")]
+        ml_app: Option<String>,
+        #[arg(long, help = "Return only root spans")]
+        root_spans_only: bool,
+        #[arg(long, help = "Start time (relative like '1h' or RFC3339)")]
+        from: Option<String>,
+        #[arg(long, help = "End time (relative like 'now' or RFC3339)")]
+        to: Option<String>,
+        #[arg(long, default_value = "20", help = "Number of spans to return")]
+        limit: u32,
+        #[arg(long, help = "Pagination cursor from a previous response")]
+        cursor: Option<String>,
     },
 }
 
@@ -8151,6 +8243,71 @@ async fn main_inner() -> anyhow::Result<()> {
                     LlmObsExperimentsActions::Delete { file } => {
                         commands::llm_obs::experiments_delete(&cfg, &file).await?;
                     }
+                    LlmObsExperimentsActions::Summary { experiment_id } => {
+                        commands::llm_obs::experiments_summary(&cfg, &experiment_id).await?;
+                    }
+                    LlmObsExperimentsActions::Events { action } => match action {
+                        LlmObsExperimentsEventsActions::List {
+                            experiment_id,
+                            limit,
+                            offset,
+                            filter_dimension_key,
+                            filter_dimension_value,
+                            filter_metric_label,
+                            sort_by_metric,
+                            sort_direction,
+                        } => {
+                            commands::llm_obs::experiments_events_list(
+                                &cfg,
+                                &experiment_id,
+                                limit,
+                                offset,
+                                filter_dimension_key,
+                                filter_dimension_value,
+                                filter_metric_label,
+                                sort_by_metric,
+                                &sort_direction,
+                            )
+                            .await?;
+                        }
+                        LlmObsExperimentsEventsActions::Get {
+                            experiment_id,
+                            event_id,
+                        } => {
+                            commands::llm_obs::experiments_events_get(
+                                &cfg,
+                                &experiment_id,
+                                &event_id,
+                            )
+                            .await?;
+                        }
+                    },
+                    LlmObsExperimentsActions::MetricValues {
+                        experiment_id,
+                        metric_label,
+                        segment_by_dimension,
+                        segment_dimension_value,
+                    } => {
+                        commands::llm_obs::experiments_metric_values(
+                            &cfg,
+                            &experiment_id,
+                            &metric_label,
+                            segment_by_dimension,
+                            segment_dimension_value,
+                        )
+                        .await?;
+                    }
+                    LlmObsExperimentsActions::DimensionValues {
+                        experiment_id,
+                        dimension_key,
+                    } => {
+                        commands::llm_obs::experiments_dimension_values(
+                            &cfg,
+                            &experiment_id,
+                            &dimension_key,
+                        )
+                        .await?;
+                    }
                 },
                 LlmObsActions::Datasets { action } => match action {
                     LlmObsDatasetsActions::Create { project_id, file } => {
@@ -8158,6 +8315,37 @@ async fn main_inner() -> anyhow::Result<()> {
                     }
                     LlmObsDatasetsActions::List { project_id } => {
                         commands::llm_obs::datasets_list(&cfg, &project_id).await?;
+                    }
+                },
+                LlmObsActions::Spans { action } => match action {
+                    LlmObsSpansActions::Search {
+                        query,
+                        trace_id,
+                        span_id,
+                        span_kind,
+                        span_name,
+                        ml_app,
+                        root_spans_only,
+                        from,
+                        to,
+                        limit,
+                        cursor,
+                    } => {
+                        commands::llm_obs::spans_search(
+                            &cfg,
+                            query,
+                            trace_id,
+                            span_id,
+                            span_kind,
+                            span_name,
+                            ml_app,
+                            root_spans_only,
+                            from,
+                            to,
+                            limit,
+                            cursor,
+                        )
+                        .await?;
                     }
                 },
             }
