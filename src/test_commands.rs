@@ -2121,3 +2121,499 @@ fn test_read_only_guard_exempts_auth() {
     let top = crate::get_top_level_subcommand_name(&matches);
     assert_eq!(top.as_deref(), Some("auth"));
 }
+
+// =========================================================================
+// LLM Observability analytics commands — use specific path mocks since all
+// new commands call client::raw_post (not the typed DD client), so mockito
+// can match exact paths.
+// =========================================================================
+
+// Helper: create a mock for a specific POST path
+async fn mock_post(
+    server: &mut mockito::Server,
+    path: &str,
+    status: usize,
+    body: &str,
+) -> mockito::Mock {
+    server
+        .mock("POST", path)
+        .with_status(status)
+        .with_header("content-type", "application/json")
+        .with_body(body)
+        .create_async()
+        .await
+}
+
+// -------------------------------------------------------------------------
+// experiments summary
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_llm_obs_experiments_summary() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"experiment_id":"exp-1","total_events":3,"error_count":0,"evals":{},"available_dimensions":["env","ml_app"]}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/summary",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_summary(&cfg, "exp-1").await;
+    assert!(result.is_ok(), "experiments_summary failed: {:?}", result.err());
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_summary_404() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/summary",
+        404,
+        r#"{"errors":["experiment not found"]}"#,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_summary(&cfg, "does-not-exist").await;
+    assert!(result.is_err(), "should fail on 404");
+    assert!(result.unwrap_err().to_string().contains("404"));
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_summary_500() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/summary",
+        500,
+        r#"{"errors":["internal server error"]}"#,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_summary(&cfg, "exp-1").await;
+    assert!(result.is_err(), "should fail on 500");
+    assert!(result.unwrap_err().to_string().contains("500"));
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_summary_no_auth() {
+    let _lock = lock_env();
+    let cfg = Config {
+        api_key: None,
+        app_key: None,
+        access_token: None,
+        site: "datadoghq.com".into(),
+        org: None,
+        output_format: OutputFormat::Json,
+        auto_approve: false,
+        agent_mode: false,
+        read_only: false,
+    };
+
+    let result = crate::commands::llm_obs::experiments_summary(&cfg, "exp-1").await;
+    assert!(result.is_err(), "should fail without auth");
+    cleanup_env();
+}
+
+// -------------------------------------------------------------------------
+// experiments events list
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_llm_obs_experiments_events_list() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"events":[{"id":"evt-1","status":"ok","duration_ms":100.0,"metrics":{}}],"total_matching":1,"returned":1,"offset":0}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/events",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_events_list(
+        &cfg, "exp-1", 20, 0, None, None, None, None, "desc",
+    )
+    .await;
+    assert!(result.is_ok(), "experiments_events_list failed: {:?}", result.err());
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_events_list_with_filters() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"events":[],"total_matching":0,"returned":0,"offset":0}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/events",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_events_list(
+        &cfg,
+        "exp-1",
+        5,
+        10,
+        Some("env".into()),
+        Some("prod".into()),
+        Some("score".into()),
+        Some("accuracy".into()),
+        "asc",
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "experiments_events_list with filters failed: {:?}",
+        result.err()
+    );
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_events_list_401() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/events",
+        401,
+        r#"{"errors":["Forbidden"]}"#,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_events_list(
+        &cfg, "exp-1", 20, 0, None, None, None, None, "desc",
+    )
+    .await;
+    assert!(result.is_err(), "should fail on 401");
+    assert!(result.unwrap_err().to_string().contains("401"));
+    cleanup_env();
+}
+
+// -------------------------------------------------------------------------
+// experiments events get
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_llm_obs_experiments_events_get() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"id":"evt-1","status":"ok","duration_ms":100.0,"input":{"prompt":"hello"},"output":{"response":"world"},"metrics":{},"dimensions":{}}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/event",
+        200,
+        body,
+    )
+    .await;
+
+    let result =
+        crate::commands::llm_obs::experiments_events_get(&cfg, "exp-1", "evt-1").await;
+    assert!(result.is_ok(), "experiments_events_get failed: {:?}", result.err());
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_events_get_404() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/event",
+        404,
+        r#"{"errors":["event not found"]}"#,
+    )
+    .await;
+
+    let result =
+        crate::commands::llm_obs::experiments_events_get(&cfg, "exp-1", "missing-evt").await;
+    assert!(result.is_err(), "should fail on 404");
+    assert!(result.unwrap_err().to_string().contains("404"));
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_events_get_no_auth() {
+    let _lock = lock_env();
+    let cfg = Config {
+        api_key: None,
+        app_key: None,
+        access_token: None,
+        site: "datadoghq.com".into(),
+        org: None,
+        output_format: OutputFormat::Json,
+        auto_approve: false,
+        agent_mode: false,
+        read_only: false,
+    };
+
+    let result =
+        crate::commands::llm_obs::experiments_events_get(&cfg, "exp-1", "evt-1").await;
+    assert!(result.is_err(), "should fail without auth");
+    cleanup_env();
+}
+
+// -------------------------------------------------------------------------
+// experiments metric-values
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_llm_obs_experiments_metric_values() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"metric_label":"accuracy","metric_type":"score","overall":{"count":10,"mean":0.85,"min_value":0.5,"max_value":1.0,"p50":0.9,"p90":0.95,"p95":0.98},"total_events":10}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/metric-values",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_metric_values(
+        &cfg, "exp-1", "accuracy", None, None,
+    )
+    .await;
+    assert!(result.is_ok(), "experiments_metric_values failed: {:?}", result.err());
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_metric_values_segmented() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"metric_label":"accuracy","metric_type":"score","overall":{"count":5,"mean":0.9},"segments":[{"dimension_value":"prod","stats":{"count":5,"mean":0.9}}],"total_events":5}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/metric-values",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_metric_values(
+        &cfg,
+        "exp-1",
+        "accuracy",
+        Some("env".into()),
+        Some("prod".into()),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "experiments_metric_values segmented failed: {:?}",
+        result.err()
+    );
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_metric_values_500() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/metric-values",
+        500,
+        r#"{"errors":["internal server error"]}"#,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::experiments_metric_values(
+        &cfg, "exp-1", "accuracy", None, None,
+    )
+    .await;
+    assert!(result.is_err(), "should fail on 500");
+    assert!(result.unwrap_err().to_string().contains("500"));
+    cleanup_env();
+}
+
+// -------------------------------------------------------------------------
+// experiments dimension-values
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_llm_obs_experiments_dimension_values() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"dimension":"env","unique_count":2,"values":[{"value":"prod","count":8},{"value":"staging","count":2}]}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/dimension-values",
+        200,
+        body,
+    )
+    .await;
+
+    let result =
+        crate::commands::llm_obs::experiments_dimension_values(&cfg, "exp-1", "env").await;
+    assert!(
+        result.is_ok(),
+        "experiments_dimension_values failed: {:?}",
+        result.err()
+    );
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_experiments_dimension_values_403() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/experiment/dimension-values",
+        403,
+        r#"{"errors":["Forbidden"]}"#,
+    )
+    .await;
+
+    let result =
+        crate::commands::llm_obs::experiments_dimension_values(&cfg, "exp-1", "env").await;
+    assert!(result.is_err(), "should fail on 403");
+    assert!(result.unwrap_err().to_string().contains("403"));
+    cleanup_env();
+}
+
+// -------------------------------------------------------------------------
+// spans search
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_llm_obs_spans_search() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"spans":[{"span_id":"s-1","trace_id":"t-1","name":"llm-call","span_kind":"llm","ml_app":"my-app","status":"ok","duration_ms":42.0,"start_ms":1000000,"tags":[]}]}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/trace/search-spans",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::spans_search(
+        &cfg,
+        Some("llm-call".into()),
+        None,
+        None,
+        None,
+        None,
+        Some("my-app".into()),
+        false,
+        None,
+        None,
+        10,
+        None,
+    )
+    .await;
+    assert!(result.is_ok(), "spans_search failed: {:?}", result.err());
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_spans_search_empty_results() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let body = r#"{"status":"success","data":{"spans":[]}}"#;
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/trace/search-spans",
+        200,
+        body,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::spans_search(
+        &cfg, None, None, None, None, None, None, false, None, None, 20, None,
+    )
+    .await;
+    assert!(result.is_ok(), "spans_search empty failed: {:?}", result.err());
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_spans_search_500() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = mock_post(
+        &mut server,
+        "/api/unstable/llm-obs-mcp/v1/trace/search-spans",
+        500,
+        r#"{"errors":["internal server error"]}"#,
+    )
+    .await;
+
+    let result = crate::commands::llm_obs::spans_search(
+        &cfg, None, None, None, None, None, None, false, None, None, 20, None,
+    )
+    .await;
+    assert!(result.is_err(), "should fail on 500");
+    assert!(result.unwrap_err().to_string().contains("500"));
+    cleanup_env();
+}
+
+#[tokio::test]
+async fn test_llm_obs_spans_search_no_auth() {
+    let _lock = lock_env();
+    let cfg = Config {
+        api_key: None,
+        app_key: None,
+        access_token: None,
+        site: "datadoghq.com".into(),
+        org: None,
+        output_format: OutputFormat::Json,
+        auto_approve: false,
+        agent_mode: false,
+        read_only: false,
+    };
+
+    let result = crate::commands::llm_obs::spans_search(
+        &cfg, None, None, None, None, None, None, false, None, None, 20, None,
+    )
+    .await;
+    assert!(result.is_err(), "should fail without auth");
+    cleanup_env();
+}
