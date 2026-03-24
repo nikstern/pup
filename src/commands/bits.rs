@@ -261,7 +261,8 @@ async fn resolve_agent_id(
     let req = if let Some(token) = access_token {
         req.header("Authorization", format!("Bearer {token}"))
     } else if let (Some(ak), Some(apk)) = (api_key, app_key) {
-        req.header("DD-API-KEY", ak).header("DD-APPLICATION-KEY", apk)
+        req.header("DD-API-KEY", ak)
+            .header("DD-APPLICATION-KEY", apk)
     } else {
         anyhow::bail!("no authentication configured");
     };

@@ -2967,10 +2967,7 @@ enum BitsActions {
     Ask {
         /// The question or prompt to send to Bits AI (optional with --interactive)
         query: Option<String>,
-        #[arg(
-            long,
-            help = "Bits AI agent ID (auto-discovered if omitted)"
-        )]
+        #[arg(long, help = "Bits AI agent ID (auto-discovered if omitted)")]
         agent_id: Option<String>,
         #[arg(
             long,
