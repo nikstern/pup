@@ -9,24 +9,31 @@ clap_complete,crate,MIT OR Apache-2.0,Copyright clap contributors
 comfy-table,crate,MIT,Copyright Arne Beer
 datadog-api-client,crate,Apache-2.0,Copyright Datadog Inc.
 dirs,crate,MIT OR Apache-2.0,Copyright Simon Ochsenreither
+futures,crate,MIT OR Apache-2.0,Copyright The futures-rs Authors
 getrandom,crate,MIT OR Apache-2.0,Copyright The Rand Project Developers
 js-sys,crate,MIT OR Apache-2.0,Copyright The wasm-bindgen Developers
 keyring,crate,MIT OR Apache-2.0,Copyright Walther Chen and Daniel Brotsky
+mockito,crate,MIT,Copyright Florin Lipan
 open,crate,MIT,Copyright Byron
 openssl,crate,Apache-2.0,Copyright Steven Fackler
 rand,crate,MIT OR Apache-2.0,Copyright The Rand Project Developers
 regex,crate,MIT OR Apache-2.0,Copyright Andrew Gallant
 reqwest,crate,MIT OR Apache-2.0,Copyright Sean McArthur
 reqwest-middleware,crate,MIT OR Apache-2.0,Copyright TrueLayer
+russh,crate,Apache-2.0,Copyright Pierre-Étienne Meunier and russh contributors
 serde,crate,MIT OR Apache-2.0,Copyright Erick Tryzelaar and David Tolnay
 serde-wasm-bindgen,crate,MIT,Copyright Ingvar Stepanyan
 serde_json,crate,MIT OR Apache-2.0,Copyright Erick Tryzelaar and David Tolnay
-serde_yaml,crate,MIT OR Apache-2.0,Copyright David Tolnay
+serde_norway,crate,MIT OR Apache-2.0,Copyright David Tolnay
 sha2,crate,MIT OR Apache-2.0,Copyright RustCrypto Developers
+ssh-key,crate,Apache-2.0 OR MIT,Copyright RustCrypto Developers
 task-local-extensions,crate,MIT OR Apache-2.0,Copyright TrueLayer
 tokio,crate,MIT,Copyright Tokio Contributors
+tokio-tungstenite,crate,MIT,Copyright Snapview GmbH and contributors
+tokio-util,crate,MIT,Copyright Tokio Contributors
 url,crate,MIT OR Apache-2.0,Copyright The rust-url developers
 uuid,crate,Apache-2.0 OR MIT,Copyright uuid-rs contributors
 wasm-bindgen,crate,MIT OR Apache-2.0,Copyright The wasm-bindgen Developers
 wasm-bindgen-futures,crate,MIT OR Apache-2.0,Copyright The wasm-bindgen Developers
 web-sys,crate,MIT OR Apache-2.0,Copyright The wasm-bindgen Developers
+yamux,crate,Apache-2.0 OR MIT,Copyright Parity Technologies
