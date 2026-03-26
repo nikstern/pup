@@ -50,7 +50,7 @@ pup <domain> <subgroup> <action> [options] # Nested commands
 | error-tracking | issues (search, get) | src/commands/error_tracking.rs | ✅ |
 | scorecards | list, get | src/commands/scorecards.rs | ✅ |
 | usage | summary, hourly | src/commands/usage.rs | ✅ |
-| apm | services (list, stats, operations, resources), entities (list), dependencies (list), flow-map | src/commands/apm.rs | ✅ |
+| apm | services (list, stats, operations, resources), entities (list), dependencies (list), flow-map, troubleshooting (list) | src/commands/apm.rs | ✅ |
 | cost | projected, attribution, by-org, aws-config (list, get, create, delete), azure-config (list, get, create, delete), gcp-config (list, get, create, delete) | src/commands/cost.rs | ✅ |
 | product-analytics | events send | src/commands/product_analytics.rs | ✅ |
 | data-governance | scanner-rules (list) | src/commands/data_governance.rs | ✅ |

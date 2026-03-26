@@ -285,6 +285,17 @@ pup security findings search \
   --query="@severity:high"
 ```
 
+## APM Troubleshooting
+
+### List Instrumentation Errors for a Host
+```bash
+# Show APM instrumentation errors for a specific host
+pup apm troubleshooting list --hostname my-host
+
+# Narrow results to a specific time window
+pup apm troubleshooting list --hostname my-host --timeframe 4h
+```
+
 ## Infrastructure
 
 ### List Hosts
@@ -294,6 +305,20 @@ pup infrastructure hosts list
 
 # Filter by tag
 pup infrastructure hosts list --filter="env:production"
+```
+
+## Fleet
+
+### List Fleet Agents
+```bash
+# Filter agents by hostname
+pup fleet agents list --filter "hostname:my-host"
+
+# Filter by IP address
+pup fleet agents list --filter "ip_address:1.2.3.4"
+
+# Boolean filter expression
+pup fleet agents list --filter "(hostname:host-a OR hostname:host-b) AND env:prod"
 ```
 
 ### Get Host
