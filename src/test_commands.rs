@@ -2391,6 +2391,11 @@ async fn test_llm_obs_projects_list_no_auth() {
         output_format: OutputFormat::Json,
         auto_approve: false,
         agent_mode: false,
+        compact_mode: false,
+        compact_string_trunc: 200,
+        compact_array_top: 20,
+        compact_array_nested: 10,
+        compact_item_budget: 150,
         read_only: false,
     };
     let result = crate::commands::llm_obs::projects_list(&cfg).await;
@@ -2743,6 +2748,11 @@ async fn test_llm_obs_datasets_create_no_auth() {
         output_format: OutputFormat::Json,
         auto_approve: false,
         agent_mode: false,
+        compact_mode: false,
+        compact_string_trunc: 200,
+        compact_array_top: 20,
+        compact_array_nested: 10,
+        compact_item_budget: 150,
         read_only: false,
     };
     let result =
@@ -2832,6 +2842,11 @@ async fn test_llm_obs_experiments_summary_no_auth() {
         output_format: OutputFormat::Json,
         auto_approve: false,
         agent_mode: false,
+        compact_mode: false,
+        compact_string_trunc: 200,
+        compact_array_top: 20,
+        compact_array_nested: 10,
+        compact_item_budget: 150,
         read_only: false,
     };
 
@@ -2991,6 +3006,11 @@ async fn test_llm_obs_experiments_events_get_no_auth() {
         output_format: OutputFormat::Json,
         auto_approve: false,
         agent_mode: false,
+        compact_mode: false,
+        compact_string_trunc: 200,
+        compact_array_top: 20,
+        compact_array_nested: 10,
+        compact_item_budget: 150,
         read_only: false,
     };
 
@@ -3230,6 +3250,11 @@ async fn test_llm_obs_spans_search_no_auth() {
         output_format: OutputFormat::Json,
         auto_approve: false,
         agent_mode: false,
+        compact_mode: false,
+        compact_string_trunc: 200,
+        compact_array_top: 20,
+        compact_array_nested: 10,
+        compact_item_budget: 150,
         read_only: false,
     };
 

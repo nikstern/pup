@@ -54,6 +54,7 @@ pub static MONITOR_WEIGHTS: FieldWeights = FieldWeights {
         ("id", 1.0),
         ("name", 1.0),
         ("overall_state", 1.0),
+        ("url", 1.0),
         ("type", 0.9),
         ("query", 0.85),
         ("tags", 0.75),
@@ -97,6 +98,7 @@ pub static SPAN_WEIGHTS: FieldWeights = FieldWeights {
         ("status", 1.0),
         ("resource_name", 1.0),
         ("error_type", 1.0),
+        ("url", 1.0),
         ("trace_id", 0.90),
         ("operation_name", 0.85),
         ("span_id", 0.80),
@@ -130,6 +132,7 @@ pub static EVENT_WEIGHTS: FieldWeights = FieldWeights {
     weights: &[
         ("title", 1.0),
         ("timestamp", 1.0),
+        ("url", 1.0),
         ("message", 0.80),
         ("service", 0.70),
         ("tags", 0.50),
@@ -251,6 +254,7 @@ pub fn flatten_for_command(command: &str) -> Option<fn(&Value) -> Value> {
         "events search" | "events list" => Some(flatten_event),
         "dashboards list" => Some(flatten_dashboards),
         "metrics query" => Some(flatten_metric),
+        "monitors list" | "monitors get" => Some(flatten_monitor),
         _ => None,
     }
 }
@@ -314,6 +318,13 @@ pub fn flatten_span(v: &Value) -> Value {
                 out.insert("error_type".into(), t.clone());
             }
         }
+    }
+    // Construct a direct APM trace URL from trace_id.
+    if let Some(tid) = out.get("trace_id").and_then(|v| v.as_str()) {
+        out.insert(
+            "url".into(),
+            Value::String(format!("https://app.datadoghq.com/apm/trace/{tid}")),
+        );
     }
     Value::Object(out)
 }
@@ -403,6 +414,30 @@ pub fn flatten_event(v: &Value) -> Value {
                 }
             }
         }
+    }
+    // Construct a direct Event Explorer URL from the event ID.
+    if let Some(id) = out.get("id").and_then(|v| v.as_str()) {
+        out.insert(
+            "url".into(),
+            Value::String(format!("https://app.datadoghq.com/event/event?id={id}")),
+        );
+    }
+    Value::Object(out)
+}
+
+/// Monitor: already flat (no attributes wrapper), just inject a direct URL.
+/// `monitors list` returns the monitors array directly; `monitors get` returns
+/// a single monitor object. Both are handled by token-budget via MONITOR_WEIGHTS.
+pub fn flatten_monitor(v: &Value) -> Value {
+    let mut out = match v {
+        Value::Object(map) => map.clone(),
+        _ => return v.clone(),
+    };
+    if let Some(id) = out.get("id").and_then(|v| v.as_i64()) {
+        out.insert(
+            "url".into(),
+            Value::String(format!("https://app.datadoghq.com/monitors/{id}")),
+        );
     }
     Value::Object(out)
 }
@@ -859,7 +894,12 @@ mod tests {
     fn test_flatten_for_command_routing() {
         assert!(flatten_for_command("logs search").is_some());
         assert!(flatten_for_command("traces search").is_some());
-        assert!(flatten_for_command("monitors list").is_none());
+        assert!(flatten_for_command("monitors list").is_some());
+        assert!(flatten_for_command("monitors get").is_some());
+        assert!(flatten_for_command("events search").is_some());
+        assert!(flatten_for_command("events list").is_some());
+        assert!(flatten_for_command("incidents list").is_some());
+        assert!(flatten_for_command("incidents get").is_some());
     }
 
     // --- token_budget_compress_object ---
@@ -967,7 +1007,7 @@ mod tests {
             field_weights: Some(&MONITOR_WEIGHTS),
             ..default_cfg()
         };
-        let monitor = serde_json::json!({
+        let _monitor = serde_json::json!({
             "id": 1,
             "name": "test",
             "overall_state": "OK",
