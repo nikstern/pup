@@ -22,6 +22,7 @@ fn synthetics_intake_base_url(cfg: &Config) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn build_auth_headers(cfg: &Config) -> anyhow::Result<reqwest::header::HeaderMap> {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     let api_key = cfg
@@ -51,6 +52,7 @@ fn build_auth_headers(cfg: &Config) -> anyhow::Result<reqwest::header::HeaderMap
 const POLL_INTERVAL_SECS: u64 = 5;
 const TRIGGER_APP: &str = "pup_cli";
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn tests_run(
     cfg: &Config,
     public_ids: Vec<String>,

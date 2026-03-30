@@ -14,6 +14,7 @@ where
     f(&mut **store)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn login(cfg: &Config, scopes: Vec<String>) -> Result<()> {
     use crate::auth::{dcr, pkce};
 
@@ -119,6 +120,16 @@ pub async fn login(cfg: &Config, scopes: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_arch = "wasm32")]
+pub async fn login(_cfg: &Config, _scopes: Vec<String>) -> Result<()> {
+    bail!(
+        "OAuth login is not available in WASM builds.\n\
+         Use DD_ACCESS_TOKEN env var for bearer token auth,\n\
+         or DD_API_KEY + DD_APP_KEY for API key auth."
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn logout(cfg: &Config) -> Result<()> {
     let site = &cfg.site;
     let org = cfg.org.as_deref();
@@ -135,6 +146,14 @@ pub async fn logout(cfg: &Config) -> Result<()> {
     let org_label = org.map(|o| format!(" (org: {o})")).unwrap_or_default();
     eprintln!("Logged out from {site}{org_label}. Tokens removed.");
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn logout(_cfg: &Config) -> Result<()> {
+    bail!(
+        "OAuth logout is not available in WASM builds.\n\
+         Token storage is not available — credentials are read from environment variables."
+    )
 }
 
 pub fn status(cfg: &Config) -> Result<()> {
@@ -224,6 +243,7 @@ pub fn token(cfg: &Config) -> Result<()> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn refresh(cfg: &Config) -> Result<()> {
     use crate::auth::dcr;
 
@@ -267,7 +287,13 @@ pub async fn refresh(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_arch = "wasm32")]
+pub async fn refresh(_cfg: &Config) -> Result<()> {
+    bail!("OAuth token refresh is not available in WASM builds.")
+}
+
 /// List all stored org sessions from the session registry, enriched with token status.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn list(cfg: &Config) -> Result<()> {
     let sessions = storage::list_sessions()?;
 
@@ -313,4 +339,9 @@ pub fn list(cfg: &Config) -> Result<()> {
         .collect();
 
     crate::formatter::output(cfg, &enriched)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list(_cfg: &Config) -> Result<()> {
+    bail!("Session listing is not available in WASM builds.")
 }
