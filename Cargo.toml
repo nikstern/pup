@@ -119,10 +119,9 @@ ssh-key = { version = "0.6", features = ["p256", "std"], optional = true }
 futures = { version = "0.3", optional = true }
 tokio-util = { version = "0.7", features = ["compat", "io"], optional = true }
 
-# Datadog API client — wasm-compat branch adds wasm32 support
+# Datadog API client — wasm32 build support merged in f3ff218c
 # Use default-features = false; feature sets are activated per-target via features above
-# TODO: replace path with git rev once wasm-compat PR is merged
-datadog-api-client = { path = "../../DataDog/datadog-api-client-rust", optional = true, default-features = false }
+datadog-api-client = { git = "https://github.com/DataDog/datadog-api-client-rust", rev = "f3ff218ce6456fd859652f0b1f84cc307637f115", optional = true, default-features = false }
 
 # HTTP middleware (version-matched to DD client; compiles on all targets)
 reqwest-middleware = "0.2"
