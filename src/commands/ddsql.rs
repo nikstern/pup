@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 use crate::client;
 use crate::config::Config;
@@ -57,9 +58,77 @@ fn build_advanced_table_request(
         "meta": {
             "client_id": client_id(),
             "user_query_id": uuid::Uuid::new_v4().to_string(),
-            "use_async_querying": false,
+            "use_async_querying": true,
         }
     }))
+}
+
+/// Extract the query status from an async query response.
+///
+/// Returns `Ok(Some(query_id))` if the query is still running,
+/// `Ok(None)` if the query is done, or an error if the status is unexpected.
+fn extract_query_status(resp: &Value) -> Result<Option<String>> {
+    let query_meta = resp
+        .pointer("/meta/queries/0")
+        .ok_or_else(|| anyhow!("unexpected response: missing meta.queries[0]"))?;
+
+    let status = query_meta
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("unexpected response: missing query status"))?;
+
+    match status {
+        "done" => Ok(None),
+        "running" => {
+            let query_id = query_meta
+                .get("query_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("unexpected response: running query missing query_id"))?
+                .to_string();
+            Ok(Some(query_id))
+        }
+        other => Err(anyhow!("unexpected query status: {other}")),
+    }
+}
+
+/// Build a polling request for an in-progress async query.
+///
+/// Endpoint: POST /api/unstable/advanced/query/tabular/fetch
+/// Same shape as the originating request, but with an additional `query_id` in attributes.
+fn build_fetch_request(base_body: &Value, query_id: &str) -> Value {
+    let mut fetch_body = base_body.clone();
+    fetch_body["data"]["attributes"]["query_id"] = json!(query_id);
+    fetch_body
+}
+
+/// Submit an async query and poll until completion.
+///
+/// Sends the initial request and, if the query is still running, polls the fetch
+/// endpoint until the query completes.
+async fn execute_async_query(cfg: &Config, body: Value) -> Result<Value> {
+    let resp = client::raw_post(cfg, "/api/unstable/advanced/query/tabular", body.clone()).await?;
+
+    let mut query_id = match extract_query_status(&resp)? {
+        None => return Ok(resp),
+        Some(id) => id,
+    };
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let fetch_body = build_fetch_request(&body, &query_id);
+        let poll_resp = client::raw_post(
+            cfg,
+            "/api/unstable/advanced/query/tabular/fetch",
+            fetch_body,
+        )
+        .await?;
+
+        match extract_query_status(&poll_resp)? {
+            None => return Ok(poll_resp),
+            Some(id) => query_id = id,
+        }
+    }
 }
 
 pub async fn table(
@@ -72,7 +141,7 @@ pub async fn table(
     _offset: Option<i32>,
 ) -> Result<()> {
     let body = build_advanced_table_request(query, from, to, limit)?;
-    let data = client::raw_post(cfg, "/api/unstable/advanced/query/tabular", body).await?;
+    let data = execute_async_query(cfg, body).await?;
     let rows = columnar_to_rows(&data)?;
     formatter::output(cfg, &rows)
 }
@@ -86,7 +155,7 @@ pub async fn time_series(
     limit: i32,
 ) -> Result<()> {
     let body = build_advanced_table_request(query, from, to, Some(limit))?;
-    let data = client::raw_post(cfg, "/api/unstable/advanced/query/tabular", body).await?;
+    let data = execute_async_query(cfg, body).await?;
     let rows = columnar_to_rows(&data)?;
     formatter::output(cfg, &rows)
 }
@@ -162,7 +231,7 @@ mod tests {
         assert!((to - now_ms).abs() < 2000);
         assert!((from - (now_ms - 3600000)).abs() < 2000);
 
-        assert_eq!(req["meta"]["use_async_querying"], false);
+        assert_eq!(req["meta"]["use_async_querying"], true);
         assert!(req["meta"]["client_id"]
             .as_str()
             .unwrap_or("")
@@ -236,6 +305,54 @@ mod tests {
     fn test_columnar_to_rows_missing_columns() {
         let resp: Value = serde_json::from_str(r#"{"data":[{"attributes":{}}]}"#).unwrap();
         assert!(columnar_to_rows(&resp).is_err());
+    }
+
+    #[test]
+    fn test_extract_query_status_done() {
+        let resp: Value =
+            serde_json::from_str(r#"{"meta":{"queries":[{"status":"done","name":"user_query"}]}}"#)
+                .unwrap();
+        assert!(extract_query_status(&resp).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_extract_query_status_running() {
+        let resp: Value = serde_json::from_str(
+            r#"{"meta":{"queries":[{"status":"running","name":"user_query","query_id":"abc-123"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            extract_query_status(&resp).unwrap(),
+            Some("abc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_query_status_missing_meta() {
+        let resp: Value = serde_json::from_str(r#"{"data":{}}"#).unwrap();
+        assert!(extract_query_status(&resp).is_err());
+    }
+
+    #[test]
+    fn test_extract_query_status_unexpected_status() {
+        let resp: Value = serde_json::from_str(
+            r#"{"meta":{"queries":[{"status":"failed","name":"user_query"}]}}"#,
+        )
+        .unwrap();
+        let err = extract_query_status(&resp).unwrap_err();
+        assert!(err.to_string().contains("unexpected query status"));
+    }
+
+    #[test]
+    fn test_build_fetch_request_adds_query_id() {
+        let base = build_advanced_table_request("SELECT 1", "1h", "now", None).unwrap();
+        let fetch = build_fetch_request(&base, "qid-456");
+        assert_eq!(fetch["data"]["attributes"]["query_id"], "qid-456");
+        // Original fields are preserved.
+        assert_eq!(
+            fetch["data"]["attributes"]["datasets"][0]["query"]["sql_query"],
+            "SELECT 1"
+        );
     }
 
     #[test]
