@@ -1,14 +1,16 @@
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+
 #[cfg(not(target_arch = "wasm32"))]
 use async_trait::async_trait;
 #[cfg(not(target_arch = "wasm32"))]
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next};
+use reqwest_middleware::{Middleware, Next};
 #[cfg(not(target_arch = "wasm32"))]
 use task_local_extensions::Extensions;
 
 use crate::config::Config;
 
 // ---------------------------------------------------------------------------
-// Bearer token middleware (native only)
+// Bearer token middleware (native only — requires task-local-extensions)
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,20 +36,42 @@ impl Middleware for BearerAuthMiddleware {
 }
 
 // ---------------------------------------------------------------------------
-// DD Configuration builder (native only)
+// DD Configuration builder
 // ---------------------------------------------------------------------------
 
 /// Creates a DD API Configuration with all unstable ops enabled.
-/// `Configuration::new()` reads DD_API_KEY, DD_APP_KEY, DD_SITE from env.
+///
+/// Explicitly injects `cfg` credentials so API key auth works on targets where
+/// `std::env::var` is unavailable (e.g. wasm32-unknown-unknown).
 ///
 /// If PUP_MOCK_SERVER is set, redirects all API calls to the mock server.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn make_dd_config(_cfg: &Config) -> datadog_api_client::datadog::Configuration {
+pub fn make_dd_config(cfg: &Config) -> datadog_api_client::datadog::Configuration {
     let mut dd_cfg = datadog_api_client::datadog::Configuration::new();
 
-    // Enable all 63 unstable operations (snake_case in Rust client)
+    // Enable all unstable operations.
     for op in UNSTABLE_OPS {
         dd_cfg.set_unstable_operation_enabled(op, true);
+    }
+
+    // Inject auth from cfg — supplements env vars and is required on WASM
+    // targets where std::env::var always returns Err.
+    if let Some(api_key) = &cfg.api_key {
+        dd_cfg.set_auth_key(
+            "apiKeyAuth",
+            datadog_api_client::datadog::APIKey {
+                key: api_key.clone(),
+                prefix: "".to_owned(),
+            },
+        );
+    }
+    if let Some(app_key) = &cfg.app_key {
+        dd_cfg.set_auth_key(
+            "appKeyAuth",
+            datadog_api_client::datadog::APIKey {
+                key: app_key.clone(),
+                prefix: "".to_owned(),
+            },
+        );
     }
 
     // If PUP_MOCK_SERVER is set, redirect all requests to the mock server.
@@ -89,31 +113,34 @@ pub fn make_dd_config(_cfg: &Config) -> datadog_api_client::datadog::Configurati
     dd_cfg
 }
 
-/// Creates a reqwest middleware client with bearer token injection.
-/// Returns None if no bearer token is configured.
-#[cfg(not(target_arch = "wasm32"))]
+/// Creates a reqwest middleware client that injects a bearer token on every
+/// request. Returns `None` if no bearer token is configured, or on WASM
+/// targets where the token-injection middleware is unavailable.
 pub fn make_bearer_client(cfg: &Config) -> Option<ClientWithMiddleware> {
-    let token = cfg.access_token.as_ref()?;
-    let reqwest_client = reqwest::Client::builder()
-        .build()
-        .expect("failed to build reqwest client");
-    let client = ClientBuilder::new(reqwest_client)
-        .with(BearerAuthMiddleware {
-            token: token.clone(),
-        })
-        .build();
-    Some(client)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let token = cfg.access_token.as_ref()?.clone();
+        let reqwest_client = reqwest::Client::builder()
+            .build()
+            .expect("failed to build reqwest client");
+        let client = ClientBuilder::new(reqwest_client)
+            .with(BearerAuthMiddleware { token })
+            .build();
+        return Some(client);
+    }
+    #[allow(unreachable_code)]
+    None
 }
 
 // ---------------------------------------------------------------------------
-// Unstable operations table (native only — used by make_dd_config)
+// Unstable operations table — used by make_dd_config
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
-/// All 63 unstable operations (snake_case for the Rust DD client).
+/// All 85 unstable operations (snake_case for the Rust DD client).
 static UNSTABLE_OPS: &[&str] = &[
     // Incidents (16)
     "v2.list_incidents",
+    "v2.search_incidents",
     "v2.get_incident",
     "v2.create_incident",
     "v2.update_incident",
@@ -187,13 +214,39 @@ static UNSTABLE_OPS: &[&str] = &[
     "v2.list_findings",
     // SLO Status (1)
     "v2.get_slo_status",
-    // Flaky Tests (1)
+    // Flaky Tests (2)
+    "v2.search_flaky_tests",
     "v2.update_flaky_tests",
+    // Incidents Import (1)
+    "v2.import_incident",
+    // Change Management (6)
+    "v2.create_change_request",
+    "v2.create_change_request_branch",
+    "v2.delete_change_request_decision",
+    "v2.get_change_request",
+    "v2.update_change_request",
+    "v2.update_change_request_decision",
+    // Cloud Authentication (4)
+    "v2.create_aws_cloud_auth_persona_mapping",
+    "v2.delete_aws_cloud_auth_persona_mapping",
+    "v2.get_aws_cloud_auth_persona_mapping",
+    "v2.list_aws_cloud_auth_persona_mappings",
+    // LLM Observability (8)
+    "v2.create_llm_obs_project",
+    "v2.list_llm_obs_projects",
+    "v2.create_llm_obs_experiment",
+    "v2.list_llm_obs_experiments",
+    "v2.update_llm_obs_experiment",
+    "v2.delete_llm_obs_experiments",
+    "v2.create_llm_obs_dataset",
+    "v2.list_llm_obs_datasets",
 ];
 
 // ---------------------------------------------------------------------------
 // Auth type detection
 // ---------------------------------------------------------------------------
+
+use crate::useragent;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,23 +278,20 @@ pub fn get_auth_type(cfg: &Config) -> AuthType {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth-excluded endpoint validation (native only)
+// OAuth-excluded endpoint validation
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
 struct EndpointRequirement {
     path: &'static str,
     method: &'static str,
 }
 
 /// Returns true if the endpoint doesn't support OAuth and requires API key fallback.
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(dead_code)]
 pub fn requires_api_key_fallback(method: &str, path: &str) -> bool {
     find_endpoint_requirement(method, path).is_some()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn find_endpoint_requirement(method: &str, path: &str) -> Option<&'static EndpointRequirement> {
     OAUTH_EXCLUDED_ENDPOINTS.iter().find(|req| {
         if req.method != method {
@@ -257,99 +307,12 @@ fn find_endpoint_requirement(method: &str, path: &str) -> Option<&'static Endpoi
 }
 
 // ---------------------------------------------------------------------------
-// Static tables (native only)
+// Static tables
 // ---------------------------------------------------------------------------
 
-/// Endpoints that don't support OAuth (52 patterns across 7 API groups).
+/// Endpoints that don't support OAuth.
 /// Trailing "/" means prefix match for ID-parameterized paths.
-#[cfg(not(target_arch = "wasm32"))]
 static OAUTH_EXCLUDED_ENDPOINTS: &[EndpointRequirement] = &[
-    // Logs API (11)
-    EndpointRequirement {
-        path: "/api/v2/logs/events",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/events/search",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/analytics/aggregate",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/archives",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/archives/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/archives/",
-        method: "DELETE",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/custom_destinations",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/custom_destinations/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/metrics",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/metrics/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/logs/config/metrics/",
-        method: "DELETE",
-    },
-    // RUM API (10)
-    EndpointRequirement {
-        path: "/api/v2/rum/applications",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications/",
-        method: "PATCH",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/applications/",
-        method: "DELETE",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/metrics",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/metrics/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/retention_filters",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/retention_filters/",
-        method: "GET",
-    },
-    EndpointRequirement {
-        path: "/api/v2/rum/events/search",
-        method: "POST",
-    },
     // API/App Keys (8)
     EndpointRequirement {
         path: "/api/v2/api_keys",
@@ -386,20 +349,6 @@ static OAUTH_EXCLUDED_ENDPOINTS: &[EndpointRequirement] = &[
     EndpointRequirement {
         path: "/api/v2/application_keys/",
         method: "DELETE",
-    },
-    // Events (1)
-    EndpointRequirement {
-        path: "/api/v2/events/search",
-        method: "POST",
-    },
-    // Error Tracking (2)
-    EndpointRequirement {
-        path: "/api/v2/error_tracking/issues/search",
-        method: "POST",
-    },
-    EndpointRequirement {
-        path: "/api/v2/error_tracking/issues/",
-        method: "GET",
     },
     // Fleet Automation (15)
     EndpointRequirement {
@@ -462,36 +411,107 @@ static OAUTH_EXCLUDED_ENDPOINTS: &[EndpointRequirement] = &[
         path: "/api/v2/fleet/schedules/",
         method: "POST",
     },
-    // Notebooks (5)
+    // Observability Pipelines (6) — API key only, no OAuth support
     EndpointRequirement {
-        path: "/api/v1/notebooks",
+        path: "/api/v2/obs-pipelines/pipelines",
         method: "GET",
     },
     EndpointRequirement {
-        path: "/api/v1/notebooks",
+        path: "/api/v2/obs-pipelines/pipelines",
         method: "POST",
     },
     EndpointRequirement {
-        path: "/api/v1/notebooks/",
+        path: "/api/v2/obs-pipelines/pipelines/",
         method: "GET",
     },
     EndpointRequirement {
-        path: "/api/v1/notebooks/",
+        path: "/api/v2/obs-pipelines/pipelines/",
         method: "PUT",
     },
     EndpointRequirement {
-        path: "/api/v1/notebooks/",
+        path: "/api/v2/obs-pipelines/pipelines/",
+        method: "DELETE",
+    },
+    EndpointRequirement {
+        path: "/api/v2/obs-pipelines/pipelines/validate",
+        method: "POST",
+    },
+    // Cost / Billing (9) — API key only, no OAuth support
+    EndpointRequirement {
+        path: "/api/v2/usage/projected_cost",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/usage/cost_by_org",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost_by_tag/monthly_cost_attribution",
+        method: "GET",
+    },
+    // Cloud Cost Management config (12)
+    EndpointRequirement {
+        path: "/api/v2/cost/aws_cur_config",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/aws_cur_config",
+        method: "POST",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/aws_cur_config/",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/aws_cur_config/",
+        method: "DELETE",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/azure_uc_config",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/azure_uc_config",
+        method: "POST",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/azure_uc_config/",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/azure_uc_config/",
+        method: "DELETE",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/gcp_uc_config",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/gcp_uc_config",
+        method: "POST",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/gcp_uc_config/",
+        method: "GET",
+    },
+    EndpointRequirement {
+        path: "/api/v2/cost/gcp_uc_config/",
         method: "DELETE",
     },
 ];
 
 // ---------------------------------------------------------------------------
-// Raw HTTP helpers (native only)
+// Raw HTTP helpers
 // ---------------------------------------------------------------------------
 
 /// Makes an authenticated GET request directly via reqwest.
 /// Used for endpoints not covered by the typed DD API client.
-pub async fn raw_get(cfg: &Config, path: &str) -> anyhow::Result<serde_json::Value> {
+/// Pass an empty slice for `query` when no query parameters are needed.
+pub async fn raw_get(
+    cfg: &Config,
+    path: &str,
+    query: &[(&str, &str)],
+) -> anyhow::Result<serde_json::Value> {
     let url = format!("{}{}", cfg.api_base_url(), path);
     let client = reqwest::Client::new();
     let mut req = client.get(&url);
@@ -506,7 +526,51 @@ pub async fn raw_get(cfg: &Config, path: &str) -> anyhow::Result<serde_json::Val
         anyhow::bail!("no authentication configured");
     }
 
-    let resp = req.header("Accept", "application/json").send().await?;
+    if !query.is_empty() {
+        req = req.query(query);
+    }
+
+    let resp = req
+        .header("Accept", "application/json")
+        .header("User-Agent", useragent::get())
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("API error (HTTP {status}): {body}");
+    }
+    Ok(resp.json().await?)
+}
+
+/// Makes an authenticated PATCH request directly via reqwest.
+/// Used for endpoints not covered by the typed DD API client.
+pub async fn raw_patch(
+    cfg: &Config,
+    path: &str,
+    body: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let url = format!("{}{}", cfg.api_base_url(), path);
+    let client = reqwest::Client::new();
+    let mut req = client.patch(&url);
+
+    if let Some(token) = &cfg.access_token {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    } else if let (Some(api_key), Some(app_key)) = (&cfg.api_key, &cfg.app_key) {
+        req = req
+            .header("DD-API-KEY", api_key.as_str())
+            .header("DD-APPLICATION-KEY", app_key.as_str());
+    } else {
+        anyhow::bail!("no authentication configured");
+    }
+
+    let resp = req
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("User-Agent", useragent::get())
+        .json(&body)
+        .send()
+        .await?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
@@ -539,6 +603,7 @@ pub async fn raw_post(
     let resp = req
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
+        .header("User-Agent", useragent::get())
         .json(&body)
         .send()
         .await?;
@@ -562,9 +627,11 @@ mod tests {
             app_key: Some("test".into()),
             access_token: None,
             site: "datadoghq.com".into(),
+            org: None,
             output_format: crate::config::OutputFormat::Json,
             auto_approve: false,
             agent_mode: false,
+            read_only: false,
         }
     }
 
@@ -600,26 +667,29 @@ mod tests {
     }
 
     #[test]
-    fn test_requires_api_key_fallback_logs() {
-        assert!(requires_api_key_fallback("POST", "/api/v2/logs/events"));
-        assert!(requires_api_key_fallback(
+    fn test_no_fallback_for_logs() {
+        assert!(!requires_api_key_fallback("POST", "/api/v2/logs/events"));
+        assert!(!requires_api_key_fallback(
             "POST",
             "/api/v2/logs/events/search"
         ));
     }
 
     #[test]
-    fn test_requires_api_key_fallback_rum() {
-        assert!(requires_api_key_fallback("GET", "/api/v2/rum/applications"));
-        assert!(requires_api_key_fallback(
+    fn test_no_fallback_for_rum() {
+        assert!(!requires_api_key_fallback(
+            "GET",
+            "/api/v2/rum/applications"
+        ));
+        assert!(!requires_api_key_fallback(
             "GET",
             "/api/v2/rum/applications/abc-123"
         ));
     }
 
     #[test]
-    fn test_requires_api_key_fallback_events() {
-        assert!(requires_api_key_fallback("POST", "/api/v2/events/search"));
+    fn test_no_fallback_for_events_search() {
+        assert!(!requires_api_key_fallback("POST", "/api/v2/events/search"));
     }
 
     #[test]
@@ -633,29 +703,32 @@ mod tests {
     fn test_prefix_matching_with_id() {
         // Trailing "/" in the pattern should match paths with IDs
         assert!(requires_api_key_fallback(
-            "GET",
-            "/api/v2/rum/applications/some-uuid-here"
+            "DELETE",
+            "/api/v2/api_keys/key-123"
         ));
         assert!(requires_api_key_fallback(
-            "DELETE",
-            "/api/v2/logs/config/archives/archive-123"
+            "GET",
+            "/api/v2/fleet/agents/agent-123"
         ));
     }
 
     #[test]
     fn test_method_must_match() {
-        // Logs events is POST-excluded, but GET should not match
-        assert!(!requires_api_key_fallback("GET", "/api/v2/logs/events"));
+        // RUM events/search is POST-excluded, but GET should not match
+        assert!(!requires_api_key_fallback(
+            "GET",
+            "/api/v2/rum/events/search"
+        ));
     }
 
     #[test]
     fn test_unstable_ops_count() {
-        assert_eq!(UNSTABLE_OPS.len(), 64);
+        assert_eq!(UNSTABLE_OPS.len(), 85);
     }
 
     #[test]
     fn test_oauth_excluded_count() {
-        assert_eq!(OAUTH_EXCLUDED_ENDPOINTS.len(), 53);
+        assert_eq!(OAUTH_EXCLUDED_ENDPOINTS.len(), 45);
     }
 
     #[test]
@@ -724,10 +797,10 @@ mod tests {
     }
 
     #[test]
-    fn test_requires_api_key_fallback_notebooks() {
-        assert!(requires_api_key_fallback("GET", "/api/v1/notebooks"));
-        assert!(requires_api_key_fallback("GET", "/api/v1/notebooks/12345"));
-        assert!(requires_api_key_fallback("POST", "/api/v1/notebooks"));
+    fn test_no_fallback_for_notebooks() {
+        assert!(!requires_api_key_fallback("GET", "/api/v1/notebooks"));
+        assert!(!requires_api_key_fallback("GET", "/api/v1/notebooks/12345"));
+        assert!(!requires_api_key_fallback("POST", "/api/v1/notebooks"));
     }
 
     #[test]
@@ -750,8 +823,8 @@ mod tests {
     }
 
     #[test]
-    fn test_requires_api_key_fallback_error_tracking() {
-        assert!(requires_api_key_fallback(
+    fn test_no_fallback_for_error_tracking() {
+        assert!(!requires_api_key_fallback(
             "POST",
             "/api/v2/error_tracking/issues/search"
         ));

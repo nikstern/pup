@@ -10,7 +10,7 @@ Every AI agent needs a loyal companion. Meet Pup — the CLI that gives your age
 
 ## What is Pup?
 
-A comprehensive, AI-agent-ready CLI with 200+ commands across 33 Datadog products. We've unleashed the full power of Datadog's APIs so your agents can fetch metrics, sniff out errors, and track down issues without barking up the wrong API tree.
+A comprehensive, AI-agent-ready CLI with 320+ commands across 56 Datadog product domains. We've unleashed the full power of Datadog's APIs so your agents can fetch metrics, sniff out errors, and track down issues without barking up the wrong API tree.
 
 AI agents are the fastest-growing interface for infrastructure management. Companies like Vercel and AWS are racing to make their platforms agent-accessible, but we're leading the pack. Pup makes Datadog the alpha choice for AI-native workflows with 100% documented API coverage while competitors are still learning basic commands.
 
@@ -39,9 +39,9 @@ pup metrics query --query="avg:system.cpu.user{*}"   # Track the metrics tail
 
 ## API Coverage
 
-<!-- Last updated: 2026-02-22 | API Client: datadog-api-client-rust v0.27 -->
+<!-- Last updated: 2026-03-17 | API Client: datadog-api-client-rust v0.28 -->
 
-Pup implements **45 of 85+ available Datadog APIs** (53% coverage) with **300+ subcommands** across **42 command groups**.
+Pup implements **54 of 85+ available Datadog APIs** (63% coverage) with **320+ subcommands** across **57 command groups**.
 
 See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 
@@ -67,7 +67,7 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 </details>
 
 <details>
-<summary><b>🔔 Monitoring & Alerting (7/10 implemented)</b></summary>
+<summary><b>🔔 Monitoring & Alerting (8/10 implemented)</b></summary>
 
 | API Domain | Status | Pup Commands | Notes |
 |------------|--------|--------------|-------|
@@ -80,7 +80,7 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 | Status Pages | ✅ | `status-pages pages`, `status-pages components`, `status-pages degradations` | **New** — Pages, components, and degradation management |
 | Dashboard Lists | ❌ | - | Not yet implemented |
 | Powerpacks | ❌ | - | Not yet implemented |
-| Workflow Automation | ❌ | - | Not yet implemented |
+| Workflow Automation | ✅ | `workflows get`, `workflows create`, `workflows update`, `workflows delete`, `workflows run`, `workflows instances` | Full CRUD plus run and instance management (list, get, cancel) |
 
 </details>
 
@@ -101,24 +101,24 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 </details>
 
 <details>
-<summary><b>☁️ Infrastructure & Cloud (7/9 implemented)</b></summary>
+<summary><b>☁️ Infrastructure & Cloud (8/9 implemented)</b></summary>
 
 | API Domain | Status | Pup Commands | Notes |
 |------------|--------|--------------|-------|
 | Infrastructure | ✅ | `infrastructure hosts list`, `infrastructure hosts get` | Host inventory management |
 | Tags | ✅ | `tags list`, `tags get`, `tags add`, `tags update`, `tags delete` | Host tag operations |
 | Network | ⏳ | `network flows list`, `network devices list` | Placeholder — API endpoints pending |
-| Cloud (AWS) | ✅ | `cloud aws list` | AWS integration management |
+| Cloud (AWS) | ✅ | `cloud aws list`, `cloud aws cloud-auth persona-mappings` | AWS integration management with persona mapping CRUD |
 | Cloud (GCP) | ✅ | `cloud gcp list` | GCP integration management |
 | Cloud (Azure) | ✅ | `cloud azure list` | Azure integration management |
 | Cloud (OCI) | ✅ | `cloud oci` | **New** — Oracle Cloud tenancy configs and products |
-| Containers | ❌ | - | Not yet implemented |
+| Containers | ✅ | `containers list`, `containers images list` | Containers |
 | Processes | ❌ | - | Not yet implemented |
 
 </details>
 
 <details>
-<summary><b>🚨 Incident & Operations (8/9 implemented)</b></summary>
+<summary><b>🚨 Incident & Operations (10/11 implemented)</b></summary>
 
 | API Domain | Status | Pup Commands | Notes |
 |------------|--------|--------------|-------|
@@ -130,6 +130,8 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 | Scorecards | ✅ | `scorecards list`, `scorecards get` | Service quality scores |
 | Fleet Automation | ✅ | `fleet agents`, `fleet deployments`, `fleet schedules` | Agent management, deployments, schedules (Preview) |
 | HAMR | ✅ | `hamr connections get`, `hamr connections create` | **New** — High Availability Multi-Region connections |
+| Investigations | ✅ | `investigations list`, `investigations get`, `investigations trigger` | Bits AI SRE investigation management |
+| Change Management | ✅ | `change-management create`, `change-management get`, `change-management update`, `change-management create-branch`, `change-management decisions` | Change request management with decisions and branching |
 | Incident Services/Teams | ❌ | - | Not yet implemented |
 
 </details>
@@ -151,7 +153,7 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 
 | API Domain | Status | Pup Commands | Notes |
 |------------|--------|--------------|-------|
-| Users | ✅ | `users list`, `users get`, `users roles` | User and role management |
+| Users | ✅ | `users list`, `users get`, `users roles`, `users seats` | User and role management with seat assignment |
 | Organizations | ✅ | `organizations get`, `organizations list` | Organization settings management |
 | API Keys | ✅ | `api-keys list`, `api-keys get`, `api-keys create`, `api-keys delete` | Full API key CRUD |
 | App Keys | ✅ | `app-keys list`, `app-keys get`, `app-keys create`, `app-keys update`, `app-keys delete` | Full application key CRUD |
@@ -161,16 +163,19 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed command reference.
 </details>
 
 <details>
-<summary><b>⚙️ Platform & Configuration (6/8 implemented)</b></summary>
+<summary><b>⚙️ Platform & Configuration (9/11 implemented)</b></summary>
 
 | API Domain | Status | Pup Commands | Notes |
 |------------|--------|--------------|-------|
 | Usage Metering | ✅ | `usage summary`, `usage hourly` | Usage and billing metrics |
-| Cost Management | ✅ | `cost projected`, `cost attribution`, `cost by-org` | Cost attribution by tags and organizations |
-| Product Analytics | ✅ | `product-analytics events send` | Server-side product analytics events |
-| Integrations | ✅ | `integrations slack`, `integrations pagerduty`, `integrations webhooks`, `integrations jira`, `integrations servicenow` | Third-party integrations with Jira and ServiceNow support |
-| Observability Pipelines | ⏳ | `obs-pipelines list`, `obs-pipelines get` | Placeholder — API endpoints pending |
+| Cost Management | ✅ | `cost projected`, `cost attribution`, `cost by-org`, `cost aws-config`, `cost azure-config`, `cost gcp-config` | Cost attribution plus AWS/Azure/GCP cloud cost config management |
+| Product Analytics | ✅ | `product-analytics events send`, `product-analytics query` | Server-side product analytics events and queries |
+| Integrations | ✅ | `integrations slack`, `integrations pagerduty`, `integrations webhooks`, `integrations jira`, `integrations servicenow`, `integrations google-chat` | Third-party integrations with Jira, ServiceNow, and Google Chat support |
+| Observability Pipelines | ✅ | `obs-pipelines list`, `obs-pipelines get`, `obs-pipelines create`, `obs-pipelines update`, `obs-pipelines delete`, `obs-pipelines validate` | Full pipeline CRUD and validation |
+| LLM Observability | ✅ | `llm-obs projects`, `llm-obs experiments`, `llm-obs datasets` | **New** — LLM Obs projects, experiments, and dataset management |
+| Reference Tables | ✅ | `reference-tables list`, `reference-tables get`, `reference-tables create`, `reference-tables batch-query` | **New** — Reference table management for log enrichment |
 | Miscellaneous | ✅ | `misc ip-ranges`, `misc status` | IP ranges and status |
+| App Builder | ✅ | `app-builder list`, `app-builder get`, `app-builder create`, `app-builder update`, `app-builder delete`, `app-builder publish` | Low-code app management with publish/unpublish and batch delete |
 | Key Management | ❌ | - | Not yet implemented |
 | IP Allowlist | ❌ | - | Not yet implemented |
 
@@ -439,6 +444,68 @@ wasmtime run --env DD_ACCESS_TOKEN="your-token" target/wasm32-wasip2/release/pup
 # Or with API keys
 wasmtime run --env DD_API_KEY="key" --env DD_APP_KEY="key" target/wasm32-wasip2/release/pup.wasm -- --help
 ```
+
+## Agent Skills
+
+Pup ships 7 skills and 48 domain agents embedded in the binary, installable to any AI coding assistant.
+
+```bash
+# Install all skills and agents for your AI assistant
+pup skills install
+
+# Install for a specific tool
+pup skills install --target-agent=claude-code
+pup skills install --target-agent=cursor
+
+# List available skills and agents
+pup skills list
+pup skills list --type=skill
+pup skills list --type=agent
+
+# Install a specific skill
+pup skills install dd-monitors
+```
+
+For Claude Code, skills install to `.claude/skills/` and agents install to `.claude/agents/` (native subagent format). For other tools, everything installs as `SKILL.md` in the tool's skills directory.
+
+Pup is also available as a **Claude Code plugin marketplace**:
+
+```
+/plugin marketplace add datadog-labs/pup
+```
+
+## ACP Server
+
+`pup acp serve` turns pup into a local AI agent server, letting coding tools talk directly to Datadog Bits AI. It supports two protocols:
+
+- **[ACP](https://agentcommunicationprotocol.dev/)** — Agent Communication Protocol for ACP-native clients
+- **OpenAI-compatible** — `POST /chat/completions` for [opencode](https://opencode.ai), Cursor, and any `@ai-sdk/openai-compatible` client
+
+```bash
+# Start the server (auto-discovers your first Datadog AI agent)
+pup acp serve
+
+# Or target a specific agent
+pup acp serve --agent-id <uuid> --port 9099
+```
+
+Point any OpenAI-compatible client at `http://127.0.0.1:9099` to start asking questions about your Datadog environment.
+
+**opencode** (`~/Library/Application Support/opencode/opencode.jsonc`):
+```jsonc
+{
+  "provider": {
+    "datadog": {
+      "name": "Datadog AI",
+      "npm": "@ai-sdk/openai-compatible",
+      "models": { "datadog-ai": { "name": "Datadog AI Agent" } },
+      "options": { "baseURL": "http://127.0.0.1:9099" }
+    }
+  }
+}
+```
+
+See [docs/EXAMPLES.md#acp-server](docs/EXAMPLES.md) for full usage details.
 
 ## Development
 

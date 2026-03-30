@@ -13,28 +13,117 @@ jobs:
   goreleaser:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
       - name: Fetch all tags
         run: git fetch --force --tags
-      - name: Install Zig
+      - name: Cache Zig
+        id: cache-zig
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ github.workspace }}/zig-macos-aarch64-0.13.0
+          key: zig-0.13.0-macos-aarch64
+      - name: Download Zig
+        if: steps.cache-zig.outputs.cache-hit != 'true'
         run: |
           ZIG_VERSION="0.13.0"
           curl -sL "https://ziglang.org/download/${ZIG_VERSION}/zig-macos-aarch64-${ZIG_VERSION}.tar.xz" | tar xJ
-          echo "$PWD/zig-macos-aarch64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - name: Add Zig to PATH
+        run: echo "${{ github.workspace }}/zig-macos-aarch64-0.13.0" >> "$GITHUB_PATH"
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+      - name: Cache Rust dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Install build tools
+        run: brew install cargo-zigbuild wasm-pack
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@v0
-      - uses: goreleaser/goreleaser-action@v7
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
         with:
           distribution: goreleaser
           version: "~> v2"
           args: release --clean --parallelism 4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  windows:
+    name: Windows Build
+    needs: goreleaser
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Enable long paths
+        run: git config --global core.longpaths true
+      - name: Install NASM
+        run: |
+          choco install nasm -y
+          echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Cache Rust dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Build
+        run: cargo build --release
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Package
+        run: |
+          mkdir -p staging
+          cp target/release/pup.exe staging/
+          cp LICENSE staging/
+          cp LICENSE-3rdparty.csv staging/
+          cp README.md staging/
+          cd staging
+          7z a "../pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip" .
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      - name: Upload to release
+        run: gh release upload "$GITHUB_REF_NAME" "pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add to checksums and re-sign
+        run: |
+          ZIP="pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip"
+          CHECKSUMS="pup_${{ steps.version.outputs.version }}_checksums.txt"
+          SHA=$(sha256sum "$ZIP" | awk '{print $1}')
+          gh release download "$GITHUB_REF_NAME" --pattern "$CHECKSUMS" --output "$CHECKSUMS"
+          echo "$SHA  $ZIP" >> "$CHECKSUMS"
+          gh release upload "$GITHUB_REF_NAME" "$CHECKSUMS" --clobber
+          cosign sign-blob \
+            --bundle="${CHECKSUMS}.sigstore.json" \
+            "$CHECKSUMS" \
+            --yes
+          gh release upload "$GITHUB_REF_NAME" "${CHECKSUMS}.sigstore.json" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

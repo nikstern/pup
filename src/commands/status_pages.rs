@@ -1,28 +1,27 @@
-#[cfg(not(target_arch = "wasm32"))]
 use crate::client;
 use crate::config::Config;
 use crate::formatter;
 use crate::util;
 use anyhow::{bail, Result};
-#[cfg(not(target_arch = "wasm32"))]
 use datadog_api_client::datadogV2::api_status_pages::{
-    CreateComponentOptionalParams, CreateDegradationOptionalParams, CreateStatusPageOptionalParams,
-    GetComponentOptionalParams, GetDegradationOptionalParams, GetStatusPageOptionalParams,
-    ListComponentsOptionalParams, ListDegradationsOptionalParams, ListStatusPagesOptionalParams,
-    StatusPagesAPI, UpdateComponentOptionalParams, UpdateDegradationOptionalParams,
+    CreateComponentOptionalParams, CreateDegradationOptionalParams,
+    CreateMaintenanceOptionalParams, CreateStatusPageOptionalParams, GetComponentOptionalParams,
+    GetDegradationOptionalParams, GetMaintenanceOptionalParams, GetStatusPageOptionalParams,
+    ListComponentsOptionalParams, ListDegradationsOptionalParams, ListMaintenancesOptionalParams,
+    ListStatusPagesOptionalParams, StatusPagesAPI, UpdateComponentOptionalParams,
+    UpdateDegradationOptionalParams, UpdateMaintenanceOptionalParams,
     UpdateStatusPageOptionalParams,
 };
-#[cfg(not(target_arch = "wasm32"))]
 use datadog_api_client::datadogV2::model::{
-    CreateComponentRequest, CreateDegradationRequest, CreateStatusPageRequest,
-    PatchComponentRequest, PatchDegradationRequest, PatchStatusPageRequest,
+    CreateComponentRequest, CreateDegradationRequest, CreateMaintenanceRequest,
+    CreateStatusPageRequest, PatchComponentRequest, PatchDegradationRequest,
+    PatchMaintenanceRequest, PatchStatusPageRequest,
 };
 
 // ---------------------------------------------------------------------------
 // Helper: build a StatusPagesAPI with bearer-token support
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
 fn make_api(cfg: &Config) -> StatusPagesAPI {
     let dd_cfg = client::make_dd_config(cfg);
     match client::make_bearer_client(cfg) {
@@ -31,7 +30,6 @@ fn make_api(cfg: &Config) -> StatusPagesAPI {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn pages_list(cfg: &Config) -> Result<()> {
     let api = make_api(cfg);
     let resp = api
@@ -41,13 +39,6 @@ pub async fn pages_list(cfg: &Config) -> Result<()> {
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn pages_list(cfg: &Config) -> Result<()> {
-    let data = crate::api::get(cfg, "/api/v2/status_pages", &[]).await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn pages_get(cfg: &Config, page_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let uuid = util::parse_uuid(page_id, "page")?;
@@ -58,14 +49,6 @@ pub async fn pages_get(cfg: &Config, page_id: &str) -> Result<()> {
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn pages_get(cfg: &Config, page_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    let data = crate::api::get(cfg, &format!("/api/v2/status_pages/{page_id}"), &[]).await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn pages_delete(cfg: &Config, page_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let uuid = util::parse_uuid(page_id, "page")?;
@@ -76,15 +59,6 @@ pub async fn pages_delete(cfg: &Config, page_id: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn pages_delete(cfg: &Config, page_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    crate::api::delete(cfg, &format!("/api/v2/status_pages/{page_id}")).await?;
-    println!("Status page {page_id} deleted.");
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn pages_update(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
     let page_uuid = util::parse_uuid(page_id, "page")?;
     let body: PatchStatusPageRequest = util::read_json_file(file)?;
@@ -96,15 +70,6 @@ pub async fn pages_update(cfg: &Config, page_id: &str, file: &str) -> Result<()>
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn pages_update(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::patch(cfg, &format!("/api/v2/status_pages/{page_id}"), &body).await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn components_list(cfg: &Config, page_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let uuid = util::parse_uuid(page_id, "page")?;
@@ -115,19 +80,6 @@ pub async fn components_list(cfg: &Config, page_id: &str) -> Result<()> {
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn components_list(cfg: &Config, page_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    let data = crate::api::get(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/components"),
-        &[],
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn components_get(cfg: &Config, page_id: &str, component_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let page_uuid = util::parse_uuid(page_id, "page")?;
@@ -143,20 +95,6 @@ pub async fn components_get(cfg: &Config, page_id: &str, component_id: &str) -> 
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn components_get(cfg: &Config, page_id: &str, component_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    util::parse_uuid(component_id, "component")?;
-    let data = crate::api::get(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/components/{component_id}"),
-        &[],
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn components_update(
     cfg: &Config,
     page_id: &str,
@@ -179,26 +117,6 @@ pub async fn components_update(
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn components_update(
-    cfg: &Config,
-    page_id: &str,
-    component_id: &str,
-    file: &str,
-) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    util::parse_uuid(component_id, "component")?;
-    let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::patch(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/components/{component_id}"),
-        &body,
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn degradations_list(cfg: &Config) -> Result<()> {
     let api = make_api(cfg);
     let resp = api
@@ -208,13 +126,6 @@ pub async fn degradations_list(cfg: &Config) -> Result<()> {
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn degradations_list(cfg: &Config) -> Result<()> {
-    let data = crate::api::get(cfg, "/api/v2/status_pages/degradations", &[]).await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn degradations_get(cfg: &Config, page_id: &str, degradation_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let page_uuid = util::parse_uuid(page_id, "page")?;
@@ -230,20 +141,6 @@ pub async fn degradations_get(cfg: &Config, page_id: &str, degradation_id: &str)
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn degradations_get(cfg: &Config, page_id: &str, degradation_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    util::parse_uuid(degradation_id, "degradation")?;
-    let data = crate::api::get(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/degradations/{degradation_id}"),
-        &[],
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn degradations_create(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
     let page_uuid = util::parse_uuid(page_id, "page")?;
     let body: CreateDegradationRequest = util::read_json_file(file)?;
@@ -255,20 +152,6 @@ pub async fn degradations_create(cfg: &Config, page_id: &str, file: &str) -> Res
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn degradations_create(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::post(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/degradations"),
-        &body,
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn degradations_update(
     cfg: &Config,
     page_id: &str,
@@ -291,26 +174,6 @@ pub async fn degradations_update(
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn degradations_update(
-    cfg: &Config,
-    page_id: &str,
-    degradation_id: &str,
-    file: &str,
-) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    util::parse_uuid(degradation_id, "degradation")?;
-    let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::patch(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/degradations/{degradation_id}"),
-        &body,
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn components_delete(cfg: &Config, page_id: &str, component_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let page_uuid = util::parse_uuid(page_id, "page")?;
@@ -322,20 +185,6 @@ pub async fn components_delete(cfg: &Config, page_id: &str, component_id: &str) 
     Ok(())
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn components_delete(cfg: &Config, page_id: &str, component_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    util::parse_uuid(component_id, "component")?;
-    crate::api::delete(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/components/{component_id}"),
-    )
-    .await?;
-    println!("Component {component_id} deleted from page {page_id}.");
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn degradations_delete(cfg: &Config, page_id: &str, degradation_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let page_uuid = util::parse_uuid(page_id, "page")?;
@@ -347,24 +196,10 @@ pub async fn degradations_delete(cfg: &Config, page_id: &str, degradation_id: &s
     Ok(())
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn degradations_delete(cfg: &Config, page_id: &str, degradation_id: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    util::parse_uuid(degradation_id, "degradation")?;
-    crate::api::delete(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/degradations/{degradation_id}"),
-    )
-    .await?;
-    println!("Degradation {degradation_id} deleted from page {page_id}.");
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Pages create
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn pages_create(cfg: &Config, file: &str) -> Result<()> {
     let body: CreateStatusPageRequest = util::read_json_file(file)?;
     let api = make_api(cfg);
@@ -375,18 +210,10 @@ pub async fn pages_create(cfg: &Config, file: &str) -> Result<()> {
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn pages_create(cfg: &Config, file: &str) -> Result<()> {
-    let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::post(cfg, "/api/v2/status_pages", &body).await?;
-    crate::formatter::output(cfg, &data)
-}
-
 // ---------------------------------------------------------------------------
 // Components create
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn components_create(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
     let page_uuid = util::parse_uuid(page_id, "page")?;
     let body: CreateComponentRequest = util::read_json_file(file)?;
@@ -398,17 +225,65 @@ pub async fn components_create(cfg: &Config, page_id: &str, file: &str) -> Resul
     formatter::output(cfg, &resp)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn components_create(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
-    util::parse_uuid(page_id, "page")?;
-    let body: serde_json::Value = util::read_json_file(file)?;
-    let data = crate::api::post(
-        cfg,
-        &format!("/api/v2/status_pages/{page_id}/components"),
-        &body,
-    )
-    .await?;
-    crate::formatter::output(cfg, &data)
+// ---------------------------------------------------------------------------
+// Maintenances
+// ---------------------------------------------------------------------------
+
+pub async fn maintenances_list(cfg: &Config) -> Result<()> {
+    let api = make_api(cfg);
+    let resp = api
+        .list_maintenances(ListMaintenancesOptionalParams::default())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to list maintenances: {e:?}"))?;
+    formatter::output(cfg, &resp)
+}
+
+pub async fn maintenances_get(cfg: &Config, page_id: &str, maintenance_id: &str) -> Result<()> {
+    let api = make_api(cfg);
+    let page_uuid = util::parse_uuid(page_id, "page")?;
+    let maintenance_uuid = util::parse_uuid(maintenance_id, "maintenance")?;
+    let resp = api
+        .get_maintenance(
+            page_uuid,
+            maintenance_uuid,
+            GetMaintenanceOptionalParams::default(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to get maintenance: {e:?}"))?;
+    formatter::output(cfg, &resp)
+}
+
+pub async fn maintenances_create(cfg: &Config, page_id: &str, file: &str) -> Result<()> {
+    let page_uuid = util::parse_uuid(page_id, "page")?;
+    let body: CreateMaintenanceRequest = util::read_json_file(file)?;
+    let api = make_api(cfg);
+    let resp = api
+        .create_maintenance(page_uuid, body, CreateMaintenanceOptionalParams::default())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create maintenance: {e:?}"))?;
+    formatter::output(cfg, &resp)
+}
+
+pub async fn maintenances_update(
+    cfg: &Config,
+    page_id: &str,
+    maintenance_id: &str,
+    file: &str,
+) -> Result<()> {
+    let page_uuid = util::parse_uuid(page_id, "page")?;
+    let maintenance_uuid = util::parse_uuid(maintenance_id, "maintenance")?;
+    let body: PatchMaintenanceRequest = util::read_json_file(file)?;
+    let api = make_api(cfg);
+    let resp = api
+        .update_maintenance(
+            page_uuid,
+            maintenance_uuid,
+            body,
+            UpdateMaintenanceOptionalParams::default(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to update maintenance: {e:?}"))?;
+    formatter::output(cfg, &resp)
 }
 
 // ---------------------------------------------------------------------------

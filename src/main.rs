@@ -1,10 +1,14 @@
-#[allow(dead_code)]
+// api.rs provides raw HTTP helpers used by test_commands.rs; not needed in production binary.
+#[cfg(test)]
 mod api;
 mod auth;
 mod client;
 mod commands;
 mod config;
 mod formatter;
+mod skills;
+#[cfg(not(target_arch = "wasm32"))]
+mod tunnel;
 mod useragent;
 mod util;
 mod version;
@@ -20,12 +24,12 @@ pub(crate) mod test_utils {
     pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 }
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "pup", version = version::VERSION, about = "Datadog API CLI")]
-struct Cli {
-    /// Output format (json, table, yaml)
+pub(crate) struct Cli {
+    /// Output format (json, table, yaml, csv)
     #[arg(short, long, global = true, default_value = "json")]
     output: String,
     /// Auto-approve destructive operations
@@ -34,12 +38,47 @@ struct Cli {
     /// Enable agent mode
     #[arg(long, global = true)]
     agent: bool,
+    /// Block all write operations (create, update, delete)
+    #[arg(long, global = true)]
+    read_only: bool,
+    /// Named org session (see 'pup auth login --org')
+    #[arg(long, global = true)]
+    org: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Start a local ACP server that proxies to Datadog Bits AI
+    ///
+    /// Spawns an HTTP server implementing the Agent Communication Protocol (ACP).
+    /// ACP clients (AI agents, coding assistants) can connect and ask questions
+    /// about your Datadog environment. Requests are forwarded to the Bits AI
+    /// assistant and streamed back via ACP's SSE protocol.
+    ///
+    /// COMMANDS:
+    ///   serve     Start the ACP server (default port 9099)
+    ///
+    /// EXAMPLES:
+    ///   # Start on default port
+    ///   pup acp serve
+    ///
+    ///   # Start on a custom port
+    ///   pup acp serve --port 8080
+    ///
+    ///   # Start bound to all interfaces
+    ///   pup acp serve --host 0.0.0.0
+    ///
+    /// AUTHENTICATION:
+    ///   Requires OAuth2 (via 'pup auth login') or DD_API_KEY + DD_APP_KEY.
+    ///
+    /// ACP SPEC: https://agentcommunicationprotocol.dev/
+    #[command(verbatim_doc_comment)]
+    Acp {
+        #[command(subcommand)]
+        action: AcpActions,
+    },
     /// Schema and guide for the datadog-agent daemon and AI coding assistants
     ///
     /// This command group covers two distinct purposes:
@@ -98,6 +137,28 @@ enum Commands {
         #[command(subcommand)]
         action: AliasActions,
     },
+    /// Manage agent skills for AI coding assistants
+    ///
+    /// Install structured workflow guides, domain references, and specialized
+    /// agents that teach AI coding assistants how to compose pup commands.
+    ///
+    /// COMMANDS:
+    ///   list      List available skills and agents
+    ///   install   Install skills for the detected AI coding assistant
+    ///   path      Show where skills would be installed
+    ///
+    /// EXAMPLES:
+    ///   pup skills list
+    ///   pup skills install
+    ///   pup skills install dd-pup
+    ///   pup skills install --type=agent
+    ///   pup skills install --target-agent=cursor
+    ///   pup skills path
+    #[command(verbatim_doc_comment)]
+    Skills {
+        #[command(subcommand)]
+        action: SkillsActions,
+    },
     /// Manage API keys
     ///
     /// Manage Datadog API keys.
@@ -132,6 +193,52 @@ enum Commands {
     ApiKeys {
         #[command(subcommand)]
         action: ApiKeyActions,
+    },
+    /// Manage App Builder applications
+    ///
+    /// Create, manage, and deploy custom internal tools using Datadog's
+    /// low-code App Builder platform.
+    ///
+    /// CAPABILITIES:
+    ///   • List, get, create, update, and delete apps
+    ///   • Bulk delete multiple apps
+    ///   • Publish and unpublish apps
+    ///
+    /// EXAMPLES:
+    ///   # List all apps
+    ///   pup app-builder list
+    ///
+    ///   # Filter apps by query
+    ///   pup app-builder list --query="incident"
+    ///
+    ///   # Get app details
+    ///   pup app-builder get <app-id>
+    ///
+    ///   # Create an app from file
+    ///   pup app-builder create --body @app.json
+    ///
+    ///   # Update an app
+    ///   pup app-builder update <app-id> --body @updated.json
+    ///
+    ///   # Delete an app
+    ///   pup app-builder delete <app-id>
+    ///
+    ///   # Delete multiple apps
+    ///   pup app-builder delete-batch --app-ids="id1,id2,id3"
+    ///
+    ///   # Publish an app
+    ///   pup app-builder publish <app-id>
+    ///
+    ///   # Unpublish an app
+    ///   pup app-builder unpublish <app-id>
+    ///
+    /// AUTHENTICATION:
+    ///   Requires API key authentication with Actions API access.
+    ///   The application key must be registered for Actions API access.
+    #[command(name = "app-builder", verbatim_doc_comment)]
+    AppBuilder {
+        #[command(subcommand)]
+        action: AppBuilderActions,
     },
     /// Manage application keys
     ///
@@ -324,21 +431,47 @@ enum Commands {
     ///   pup auth logout
     ///
     ///   # Login to different Datadog site
+    ///   pup auth login --site datadoghq.eu
     ///   DD_SITE=datadoghq.eu pup auth login
+    ///
+    ///   # Login to a child org (multi-org support)
+    ///   pup auth login --org prod-child
+    ///   pup auth login --org staging-child
+    ///
+    ///   # List all stored org sessions
+    ///   pup auth list
+    ///
+    ///   # Use a named org session for any command
+    ///   pup monitors list --org prod-child
+    ///   DD_ORG=prod-child pup metrics query --query "avg:system.cpu.user{*}"
+    ///
+    ///   # Logout a specific org session
+    ///   pup auth logout --org staging-child
     ///
     /// MULTI-SITE SUPPORT:
     ///   Each Datadog site maintains separate credentials:
     ///
-    ///   DD_SITE=datadoghq.com pup auth login     # US1 (default)
-    ///   DD_SITE=datadoghq.eu pup auth login      # EU1
-    ///   DD_SITE=us3.datadoghq.com pup auth login # US3
-    ///   DD_SITE=us5.datadoghq.com pup auth login # US5
-    ///   DD_SITE=ap1.datadoghq.com pup auth login # AP1
+    ///   pup auth login --site datadoghq.com     # US1 (default)
+    ///   pup auth login --site datadoghq.eu      # EU1
+    ///   pup auth login --site us3.datadoghq.com # US3
+    ///   pup auth login --site us5.datadoghq.com # US5
+    ///   pup auth login --site ap1.datadoghq.com # AP1
+    ///   DD_SITE=datadoghq.com pup auth login     # US1 (via env var)
+    ///   DD_SITE=datadoghq.eu pup auth login      # EU1 (via env var)
+    ///
+    /// MULTI-ORG SUPPORT:
+    ///   Datadog parent/child sub-organizations each get their own session:
+    ///
+    ///   pup auth login --org prod-child    # saves tokens_<site>_prod_child
+    ///   pup auth login --org staging-child # saves tokens_<site>_staging_child
+    ///   pup monitors list --org prod-child # uses prod-child session
     ///
     /// TOKEN STORAGE:
     ///   Credentials are stored in:
-    ///   • ~/.config/pup/tokens_<site>.json - OAuth2 tokens
-    ///   • ~/.config/pup/client_<site>.json - DCR client credentials
+    ///   • ~/.config/pup/tokens_<site>.json          - default OAuth2 tokens
+    ///   • ~/.config/pup/tokens_<site>_<org>.json    - named org tokens
+    ///   • ~/.config/pup/client_<site>.json          - DCR client credentials (shared)
+    ///   • ~/.config/pup/sessions.json               - session registry (no secrets)
     ///
     ///   File permissions are set to 0600 (read/write owner only).
     ///
@@ -495,8 +628,8 @@ enum Commands {
     /// Generate shell completions for pup.
     ///
     /// Shell completions enable tab-completion of commands, subcommands, and flags
-    /// in your terminal. After generating completions, source or install them
-    /// according to your shell's requirements.
+    /// in your terminal. Use --install to automatically write completions to the
+    /// standard location for your shell, or pipe to stdout to manage it yourself.
     ///
     /// SUPPORTED SHELLS:
     ///   • bash: Bourne Again Shell
@@ -506,19 +639,49 @@ enum Commands {
     ///   • powershell: PowerShell
     ///
     /// EXAMPLES:
-    ///   # Generate bash completions
+    ///   # Auto-install completions (recommended)
+    ///   pup completions bash --install
+    ///   pup completions zsh --install
+    ///   pup completions fish --install
+    ///   pup completions powershell --install
+    ///
+    ///   # Or pipe to a custom location
     ///   pup completions bash > /etc/bash_completion.d/pup
-    ///
-    ///   # Generate zsh completions
     ///   pup completions zsh > ~/.zfunc/_pup
-    ///   # Then add to .zshrc: fpath+=~/.zfunc; autoload -Uz compinit; compinit
-    ///
-    ///   # Generate fish completions
     ///   pup completions fish > ~/.config/fish/completions/pup.fish
+    #[cfg(not(target_arch = "wasm32"))]
     #[command(verbatim_doc_comment)]
     Completions {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
+        /// Install completions to the default location for the shell
+        #[arg(long)]
+        install: bool,
+    },
+    /// Query running containers and container images
+    ///
+    /// List and filter containers and container images monitored by Datadog.
+    ///
+    /// CAPABILITIES:
+    ///   • List running containers with filtering and grouping
+    ///   • List container images with filtering and grouping
+    ///
+    /// EXAMPLES:
+    ///   # List all containers
+    ///   pup containers list
+    ///
+    ///   # List containers filtered by tag
+    ///   pup containers list --filter-tags="env:production"
+    ///
+    ///   # List container images
+    ///   pup containers images list
+    ///
+    /// AUTHENTICATION:
+    ///   Requires OAuth2 (via 'pup auth login') or valid API + Application keys.
+    #[command(verbatim_doc_comment)]
+    Containers {
+        #[command(subcommand)]
+        action: ContainerActions,
     },
     /// Manage cost and billing data
     ///
@@ -612,6 +775,26 @@ enum Commands {
     Dashboards {
         #[command(subcommand)]
         action: DashboardActions,
+    },
+    /// Query Datadog data using DDSQL (Datadog SQL)
+    ///
+    /// DDSQL lets you query metrics, logs, and reference tables using SQL syntax.
+    ///
+    /// COMMANDS:
+    ///   table        Execute query and return table data (supports -o json/yaml/table/csv)
+    ///   time-series  Execute query and return time series data
+    ///
+    /// EXAMPLES:
+    ///   pup ddsql table --query "SELECT * FROM reference_tables.offices_ips LIMIT 5"
+    ///   pup ddsql table --query "SELECT * FROM reference_tables.offices_ips" -o csv > results.csv
+    ///   pup ddsql time-series --query "SELECT avg(system.cpu.user) FROM metrics GROUP BY host" --from 1h --interval 300000
+    ///
+    /// AUTHENTICATION:
+    ///   Requires OAuth2 (via 'pup auth login') or API key + Application key.
+    #[command(verbatim_doc_comment)]
+    Ddsql {
+        #[command(subcommand)]
+        action: DdsqlActions,
     },
     /// Manage data governance
     ///
@@ -871,6 +1054,42 @@ enum Commands {
         #[command(subcommand)]
         action: InfraActions,
     },
+    /// Internal Developer Portal — agent-native context layer
+    ///
+    /// Retrieve service context, ownership, health, dependencies, and
+    /// suggested next actions from the Datadog Service Catalog / IDP.
+    ///
+    /// CAPABILITIES:
+    ///   • Get a full context summary for any entity (assist)
+    ///   • Find entities by name or query (find)
+    ///   • Resolve ownership and on-call (owner)
+    ///   • Show upstream/downstream dependencies (deps)
+    ///   • Register a service definition from YAML (register)
+    ///
+    /// EXAMPLES:
+    ///   # Get full context for a service
+    ///   pup idp assist catalog-http
+    ///
+    ///   # Find entities matching a query
+    ///   pup idp find "catalog"
+    ///
+    ///   # Who owns this service?
+    ///   pup idp owner catalog-http
+    ///
+    ///   # Show dependencies
+    ///   pup idp deps catalog-http
+    ///
+    ///   # Register a service definition
+    ///   pup idp register service.datadog.yaml
+    ///
+    /// AUTHENTICATION:
+    ///   Requires either OAuth2 authentication (pup auth login) or API keys
+    ///   (DD_API_KEY and DD_APP_KEY environment variables).
+    #[command(verbatim_doc_comment)]
+    Idp {
+        #[command(subcommand)]
+        action: IdpActions,
+    },
     /// Manage third-party integrations
     ///
     /// Manage third-party integrations with external services.
@@ -988,6 +1207,12 @@ enum Commands {
     ///
     ///   # Aggregate logs by status
     ///   pup logs aggregate --query="*" --compute="count" --group-by="status"
+    ///
+    ///   # Multiple computes in one query (comma-separated)
+    ///   pup logs aggregate --query="*" --compute="count,avg(@duration),percentile(@duration, 95)"
+    ///
+    ///   # Multiple group-by dimensions (comma-separated)
+    ///   pup logs aggregate --query="*" --compute="count" --group-by="service,status"
     ///
     ///   # List log archives
     ///   pup logs archives list
@@ -1306,6 +1531,12 @@ enum Commands {
     Organizations {
         #[command(subcommand)]
         action: OrgActions,
+    },
+    /// Manage change requests
+    #[command(name = "change-requests")]
+    ChangeManagement {
+        #[command(subcommand)]
+        action: ChangeManagementActions,
     },
     /// Send product analytics events
     ///
@@ -1731,6 +1962,82 @@ enum Commands {
         #[command(subcommand)]
         action: UserActions,
     },
+    /// Manage Datadog workflows
+    ///
+    /// Create, update, delete, and execute Datadog Workflow Automation workflows.
+    ///
+    /// CAPABILITIES:
+    ///   • Get workflow details
+    ///   • Create, update, and delete workflows
+    ///   • Execute workflows via API trigger (requires DD_API_KEY + DD_APP_KEY)
+    ///   • List, inspect, and cancel workflow instances (executions)
+    ///
+    /// EXAMPLES:
+    ///   # Get a workflow
+    ///   pup workflows get <workflow-id>
+    ///
+    ///   # Execute a workflow via API trigger
+    ///   pup workflows run <workflow-id> --payload '{"key": "value"}'
+    ///
+    ///   # Execute and wait for completion
+    ///   pup workflows run <workflow-id> --wait --timeout 2m
+    ///
+    ///   # List recent executions
+    ///   pup workflows instances list <workflow-id>
+    ///
+    ///   # Cancel a running execution
+    ///   pup workflows instances cancel <workflow-id> <instance-id>
+    ///
+    /// AUTHENTICATION:
+    ///   All workflow commands require DD_API_KEY + DD_APP_KEY.
+    ///   OAuth2 bearer tokens are not supported for workflow operations at this time.
+    #[command(verbatim_doc_comment)]
+    Workflows {
+        #[command(subcommand)]
+        action: WorkflowActions,
+    },
+    /// Manage LLM Observability projects, experiments, and datasets
+    ///
+    /// Manage LLM Observability resources for AI/ML application monitoring.
+    ///
+    /// CAPABILITIES:
+    ///   • Create and list LLM Obs projects
+    ///   • Create, list, update, and delete experiments
+    ///   • Create and list datasets within a project
+    ///
+    /// EXAMPLES:
+    ///   pup llm-obs projects list
+    ///   pup llm-obs experiments list
+    ///   pup llm-obs datasets list --project-id=my-project
+    ///
+    /// AUTHENTICATION:
+    ///   Requires either OAuth2 authentication or API keys.
+    #[command(name = "llm-obs", verbatim_doc_comment)]
+    LlmObs {
+        #[command(subcommand)]
+        action: LlmObsActions,
+    },
+    /// Manage reference tables for log enrichment
+    ///
+    /// Reference tables allow you to enrich logs with additional data from
+    /// CSV files stored in cloud storage or uploaded directly.
+    ///
+    /// CAPABILITIES:
+    ///   • List, get, and create reference tables
+    ///   • Batch query rows by primary key
+    ///
+    /// EXAMPLES:
+    ///   pup reference-tables list
+    ///   pup reference-tables get <table-id>
+    ///   pup reference-tables batch-query --file=query.json
+    ///
+    /// AUTHENTICATION:
+    ///   Requires either OAuth2 authentication or API keys.
+    #[command(name = "reference-tables", verbatim_doc_comment)]
+    ReferenceTables {
+        #[command(subcommand)]
+        action: ReferenceTablesActions,
+    },
     /// Print version information
     Version,
 }
@@ -1862,11 +2169,18 @@ enum LogActions {
         from: String,
         #[arg(long, default_value = "now", help = "End time")]
         to: String,
-        #[arg(long, default_value = "count", help = "Metric to compute")]
+        #[arg(
+            long,
+            default_value = "count",
+            help = "Metrics to compute (comma-separated, e.g. count,avg(@duration),percentile(@duration, 95))"
+        )]
         compute: String,
-        #[arg(long, help = "Field to group by")]
+        #[arg(
+            long,
+            help = "Fields to group by (comma-separated, e.g. service,status)"
+        )]
         group_by: Option<String>,
-        #[arg(long, default_value_t = 10, help = "Maximum groups")]
+        #[arg(long, default_value_t = 10, help = "Maximum groups per facet")]
         limit: i32,
         #[arg(long, help = "Storage tier: indexes, online-archives, or flex")]
         storage: Option<String>,
@@ -1961,6 +2275,11 @@ enum IncidentActions {
     PostmortemTemplates {
         #[command(subcommand)]
         action: IncidentPostmortemActions,
+    },
+    /// Import an incident
+    Import {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
     },
 }
 
@@ -2225,12 +2544,10 @@ enum SyntheticsActions {
 enum SyntheticsTestActions {
     /// List synthetic tests
     List {
-        #[arg(long, help = "Return only facets (no test results)")]
-        facets_only: bool,
-        #[arg(long, help = "Include full test configuration in results")]
-        include_full_config: bool,
-        #[arg(long, help = "Sort order")]
-        sort: Option<String>,
+        #[arg(long, default_value_t = 10, help = "Results per page")]
+        page_size: i64,
+        #[arg(long, default_value_t = 0, help = "Page number")]
+        page_number: i64,
     },
     /// Get test details
     Get { public_id: String },
@@ -2238,10 +2555,36 @@ enum SyntheticsTestActions {
     Search {
         #[arg(long, help = "Search text query")]
         text: Option<String>,
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, help = "Return only facets (no test results)")]
+        facets_only: bool,
+        #[arg(long, help = "Include full test configuration in results")]
+        include_full_config: bool,
+        #[arg(
+            long,
+            default_value_t = 50,
+            help = "Maximum number of results to return"
+        )]
         count: i64,
-        #[arg(long, default_value_t = 0)]
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Offset from which to start returning results"
+        )]
         start: i64,
+        #[arg(long, help = "Sort order")]
+        sort: Option<String>,
+    },
+    /// Run synthetic tests (requires DD_API_KEY + DD_APP_KEY)
+    #[cfg(not(target_arch = "wasm32"))]
+    Run {
+        /// Public IDs of tests to run (e.g. abc-def-ghi)
+        public_ids: Vec<String>,
+        /// Run tests against internal environments (e.g. dev server) using a SSH tunnel
+        #[arg(long)]
+        tunnel: bool,
+        /// Maximum seconds to wait for results
+        #[arg(long, default_value_t = 1800)]
+        timeout: u64,
     },
 }
 
@@ -2333,6 +2676,48 @@ enum DowntimeActions {
     Cancel { id: String },
 }
 
+// ---- DDSQL ----
+#[derive(Subcommand)]
+enum DdsqlActions {
+    /// Execute DDSQL query and return columnar table data
+    Table {
+        #[arg(long, help = "DDSQL query string")]
+        query: String,
+        #[arg(
+            long,
+            default_value = "1h",
+            help = "Start time (e.g., 1h, 30m, 7d, now, unix timestamp)"
+        )]
+        from: String,
+        #[arg(long, default_value = "now", help = "End time")]
+        to: String,
+        #[arg(long, help = "Aggregation interval in milliseconds (default: 60000)")]
+        interval: Option<i64>,
+        #[arg(long, default_value_t = 50, help = "Maximum number of rows to return")]
+        limit: i32,
+        #[arg(long, help = "Number of rows to skip (for pagination)")]
+        offset: Option<i32>,
+    },
+    /// Execute DDSQL query and return time series data
+    #[command(name = "time-series")]
+    TimeSeries {
+        #[arg(long, help = "DDSQL query string")]
+        query: String,
+        #[arg(long, default_value = "1h", help = "Start time")]
+        from: String,
+        #[arg(long, default_value = "now", help = "End time")]
+        to: String,
+        #[arg(long, help = "Aggregation interval in milliseconds (default: 60000)")]
+        interval: Option<i64>,
+        #[arg(
+            long,
+            default_value_t = 5000,
+            help = "Maximum number of rows to return"
+        )]
+        limit: i32,
+    },
+}
+
 // ---- Tags ----
 #[derive(Subcommand)]
 enum TagActions {
@@ -2360,12 +2745,84 @@ enum UserActions {
         #[command(subcommand)]
         action: UserRoleActions,
     },
+    /// Manage seat assignments
+    Seats {
+        #[command(subcommand)]
+        action: SeatsActions,
+    },
 }
 
 #[derive(Subcommand)]
 enum UserRoleActions {
     /// List roles
     List,
+}
+
+// ---- Workflows ----
+#[derive(Subcommand)]
+enum WorkflowActions {
+    /// Get a workflow by ID
+    Get { workflow_id: String },
+    /// Create a workflow from a JSON file
+    Create {
+        #[arg(long)]
+        file: String,
+    },
+    /// Update a workflow from a JSON file
+    Update {
+        workflow_id: String,
+        #[arg(long)]
+        file: String,
+    },
+    /// Delete a workflow
+    Delete { workflow_id: String },
+    /// Execute a workflow via API trigger (requires DD_API_KEY + DD_APP_KEY)
+    ///
+    /// The workflow must have an API trigger configured.
+    /// OAuth tokens are not supported — this command requires API key authentication.
+    #[command(verbatim_doc_comment)]
+    Run {
+        workflow_id: String,
+        #[arg(long, help = "JSON payload for workflow input parameters")]
+        payload: Option<String>,
+        #[arg(long, help = "Path to a JSON file with input parameters")]
+        payload_file: Option<String>,
+        #[arg(long, help = "Wait for the workflow to complete before returning")]
+        wait: bool,
+        #[arg(
+            long,
+            default_value = "5m",
+            help = "Timeout when --wait is set (e.g. 30s, 5m, 1h)"
+        )]
+        timeout: String,
+    },
+    /// Manage workflow instances (executions)
+    Instances {
+        #[command(subcommand)]
+        action: WorkflowInstanceActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkflowInstanceActions {
+    /// List instances of a workflow
+    List {
+        workflow_id: String,
+        #[arg(long, default_value_t = 10, help = "Page size (max 100)")]
+        limit: i64,
+        #[arg(long, default_value_t = 0, help = "Page number")]
+        page: i64,
+    },
+    /// Get a specific workflow instance
+    Get {
+        workflow_id: String,
+        instance_id: String,
+    },
+    /// Cancel a running workflow instance
+    Cancel {
+        workflow_id: String,
+        instance_id: String,
+    },
 }
 
 // ---- Infrastructure ----
@@ -2391,6 +2848,95 @@ enum InfraHostActions {
     },
     /// Get host details
     Get { hostname: String },
+}
+
+// ---- IDP (Internal Developer Portal) ----
+#[derive(Subcommand)]
+enum IdpActions {
+    /// Get full context summary with suggested next actions
+    ///
+    /// The flagship IDP command. Makes parallel API calls to return
+    /// a single unified view of any service entity:
+    ///
+    /// RETURNS:
+    ///   • Entity info (name, kind, description, lifecycle, tier, owner)
+    ///   • Owner team details (handle, name, member count, Slack channels)
+    ///   • Health signals (monitors, incidents, SLOs — pre-computed counts)
+    ///   • Dependencies (upstream/downstream services)
+    ///   • Links (dashboards, repos, runbooks)
+    ///   • Metadata gaps (missing description, lifecycle, tier, runbook, docs)
+    ///   • Suggested next actions (based on current health and gaps)
+    ///
+    /// START HERE — this is the best first command to run for any entity.
+    /// Use the other commands (owner, deps, find) to drill deeper.
+    ///
+    /// EXAMPLES:
+    ///   pup idp assist catalog-http
+    ///   pup idp assist payment-service
+    ///   pup idp assist api-gateway
+    #[command(verbatim_doc_comment)]
+    Assist {
+        /// Entity name (e.g. "catalog-http", "payment-service")
+        entity: String,
+    },
+    /// Find entities by name or query
+    ///
+    /// Search the entity graph for services, resources, or other entities.
+    /// Useful when you don't know the exact entity name.
+    ///
+    /// QUERY SYNTAX:
+    ///   Simple text searches by name. Prefix with kind: to filter by type.
+    ///   Use AND to combine filters.
+    ///
+    /// EXAMPLES:
+    ///   pup idp find "catalog"
+    ///   pup idp find "kind:service AND name:payment"
+    ///   pup idp find "kind:service AND owner:platform"
+    #[command(verbatim_doc_comment)]
+    Find {
+        /// Search query (e.g. "catalog", "kind:service AND name:payment")
+        query: String,
+    },
+    /// Resolve ownership, team details, and on-call context
+    ///
+    /// Returns the owning team, member count, Slack channels,
+    /// and on-call information for routing questions or incidents.
+    ///
+    /// EXAMPLES:
+    ///   pup idp owner catalog-http
+    ///   pup idp owner payment-service
+    #[command(verbatim_doc_comment)]
+    Owner {
+        /// Entity name
+        entity: String,
+    },
+    /// Show upstream and downstream service dependencies
+    ///
+    /// Returns which services depend on this entity (upstream)
+    /// and which services this entity calls (downstream).
+    /// Useful for blast-radius analysis before making changes.
+    ///
+    /// EXAMPLES:
+    ///   pup idp deps catalog-http
+    ///   pup idp deps api-gateway
+    #[command(verbatim_doc_comment)]
+    Deps {
+        /// Entity name
+        entity: String,
+    },
+    /// Register a service definition from a YAML file
+    ///
+    /// POSTs a service.datadog.yaml file to the Datadog Service Catalog API.
+    /// The file should use the v2.2 schema format.
+    ///
+    /// EXAMPLES:
+    ///   pup idp register services/checkout-api/service.datadog.yaml
+    ///   pup idp register ./service.datadog.yaml
+    #[command(verbatim_doc_comment)]
+    Register {
+        /// Path to the service.datadog.yaml file
+        file: String,
+    },
 }
 
 // ---- Audit Logs ----
@@ -2448,6 +2994,11 @@ enum SecurityActions {
         #[command(subcommand)]
         action: SecurityRiskScoreActions,
     },
+    /// Manage security suppression rules
+    Suppressions {
+        #[command(subcommand)]
+        action: SecuritySuppressionActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2456,6 +3007,11 @@ enum SecurityRuleActions {
     List {
         #[arg(long, help = "Filter query")]
         filter: Option<String>,
+        #[arg(
+            long,
+            help = "Sort order (name, -name, creation_date, -creation_date, update_date, -update_date, enabled, -enabled, type, -type, highest_severity, -highest_severity, source, -source)"
+        )]
+        sort: Option<String>,
     },
     /// Get rule details
     Get { rule_id: String },
@@ -2512,6 +3068,180 @@ enum SecurityRiskScoreActions {
         #[arg(long)]
         query: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum SecuritySuppressionActions {
+    /// List suppression rules
+    List {
+        #[arg(
+            long,
+            help = "Sort order (name, -name, start_date, -start_date, expiration_date, -expiration_date, update_date, -update_date, -creation_date, enabled, -enabled)"
+        )]
+        sort: Option<String>,
+    },
+    /// Get suppression rule details
+    Get { suppression_id: String },
+    /// Create a suppression rule
+    Create {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Update a suppression rule
+    Update {
+        suppression_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Delete a suppression rule
+    Delete { suppression_id: String },
+    /// Validate a suppression rule
+    Validate {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+}
+
+// ---- Seats ----
+#[derive(Subcommand)]
+enum SeatsActions {
+    /// Manage seat assignments
+    Users {
+        #[command(subcommand)]
+        action: SeatsUserActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum SeatsUserActions {
+    /// List users with seats
+    List {
+        #[arg(long, help = "Product (e.g. incident_response)")]
+        product: String,
+        #[arg(long, default_value_t = 100, help = "Page limit")]
+        limit: i32,
+    },
+    /// Assign seats to users
+    Assign {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Unassign seats from users
+    Unassign {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+}
+
+// ---- Change Management ----
+#[derive(Subcommand)]
+enum ChangeManagementActions {
+    /// Create a change request
+    Create {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Get a change request
+    Get { change_request_id: String },
+    /// Update a change request
+    Update {
+        change_request_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Create a branch for a change request
+    #[command(name = "create-branch")]
+    CreateBranch {
+        change_request_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Manage change request decisions
+    Decisions {
+        #[command(subcommand)]
+        action: ChangeRequestDecisionActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum ChangeRequestDecisionActions {
+    /// Delete a decision
+    Delete {
+        change_request_id: String,
+        decision_id: String,
+    },
+    /// Update a decision
+    Update {
+        change_request_id: String,
+        decision_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+}
+
+// ---- Cloud Authentication ----
+#[derive(Subcommand)]
+enum CloudAuthActions {
+    /// Manage AWS persona mappings
+    #[command(name = "persona-mappings")]
+    PersonaMappings {
+        #[command(subcommand)]
+        action: CloudAuthPersonaMappingActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum CloudAuthPersonaMappingActions {
+    /// List persona mappings
+    List,
+    /// Get a persona mapping
+    Get { mapping_id: String },
+    /// Create a persona mapping
+    Create {
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Delete a persona mapping
+    Delete { mapping_id: String },
+}
+
+// ---- Google Chat Integration ----
+#[derive(Subcommand)]
+enum GoogleChatActions {
+    /// Manage organization handles
+    Handles {
+        #[command(subcommand)]
+        action: GoogleChatHandleActions,
+    },
+    /// Get a space by display name
+    #[command(name = "space-get")]
+    SpaceGet {
+        domain_name: String,
+        space_display_name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum GoogleChatHandleActions {
+    /// List organization handles
+    List { org_id: String },
+    /// Get an organization handle
+    Get { org_id: String, handle_id: String },
+    /// Create an organization handle
+    Create {
+        org_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Update an organization handle
+    Update {
+        org_id: String,
+        handle_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Delete an organization handle
+    Delete { org_id: String, handle_id: String },
 }
 
 // ---- Organizations ----
@@ -2799,6 +3529,69 @@ enum ApiKeyActions {
     },
     /// Delete an API key (DESTRUCTIVE)
     Delete { key_id: String },
+}
+
+// ---- App Builder ----
+#[derive(Subcommand)]
+enum AppBuilderActions {
+    /// List App Builder applications
+    List {
+        /// Filter apps by query string
+        #[arg(long, help = "Filter apps by query string")]
+        query: Option<String>,
+    },
+    /// Get App Builder application details
+    Get {
+        /// App ID (UUID)
+        #[arg(name = "app-id")]
+        app_id: String,
+    },
+    /// Create a new App Builder application
+    Create {
+        #[arg(
+            long,
+            name = "body",
+            help = "JSON body (@filepath or - for stdin) (required)"
+        )]
+        file: String,
+    },
+    /// Update an App Builder application
+    Update {
+        /// App ID (UUID)
+        #[arg(name = "app-id")]
+        app_id: String,
+        #[arg(
+            long,
+            name = "body",
+            help = "JSON body (@filepath or - for stdin) (required)"
+        )]
+        file: String,
+    },
+    /// Delete an App Builder application (DESTRUCTIVE)
+    Delete {
+        /// App ID (UUID)
+        #[arg(name = "app-id")]
+        app_id: String,
+    },
+    /// Delete multiple App Builder applications (DESTRUCTIVE)
+    #[command(name = "delete-batch")]
+    DeleteBatch {
+        /// Comma-separated list of app IDs (UUIDs)
+        #[arg(long, value_delimiter = ',', help = "Comma-separated list of app IDs")]
+        app_ids: Vec<String>,
+    },
+    /// Publish an App Builder application
+    Publish {
+        /// App ID (UUID)
+        #[arg(name = "app-id")]
+        app_id: String,
+    },
+    /// Unpublish an App Builder application
+    Unpublish {
+        /// App ID (UUID)
+        #[arg(name = "app-id")]
+        app_id: String,
+    },
 }
 
 // ---- App Keys ----
@@ -3253,7 +4046,10 @@ enum CicdFlakyTestActions {
         limit: i64,
         #[arg(long, default_value_t = false, help = "Include status history")]
         include_history: bool,
-        #[arg(long, help = "Sort order (fqn, -fqn)")]
+        #[arg(
+            long,
+            help = "Sort order (fqn, -fqn, first_flaked, -first_flaked, last_flaked, -last_flaked, failure_rate, -failure_rate, pipelines_failed, -pipelines_failed, pipelines_duration_lost, -pipelines_duration_lost)"
+        )]
         sort: Option<String>,
     },
     /// Update flaky tests
@@ -3366,6 +4162,11 @@ enum FleetAgentActions {
     List {
         #[arg(long)]
         page_size: Option<i64>,
+        #[arg(
+            long,
+            help = "Filter query (e.g. ip_address:1.2.3.4, hostname:my-host)"
+        )]
+        filter: Option<String>,
     },
     /// Get fleet agent details
     Get { agent_key: String },
@@ -3476,6 +4277,20 @@ enum ErrorTrackingIssueActions {
             help = "Sort order: TOTAL_COUNT, FIRST_SEEN, IMPACTED_SESSIONS, PRIORITY"
         )]
         order_by: String,
+        #[arg(
+            long,
+            conflicts_with = "persona",
+            required_unless_present = "persona",
+            help = "Error source track: trace, logs, or rum"
+        )]
+        track: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "track",
+            required_unless_present = "track",
+            help = "Client persona filter: ALL, BROWSER, MOBILE, or BACKEND"
+        )]
+        persona: Option<String>,
     },
     /// Get issue details
     Get { issue_id: String },
@@ -3546,6 +4361,35 @@ enum StatusPageActions {
     ThirdParty {
         #[command(subcommand)]
         action: StatusPageThirdPartyActions,
+    },
+    /// Manage status page maintenances
+    Maintenances {
+        #[command(subcommand)]
+        action: StatusPageMaintenanceActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatusPageMaintenanceActions {
+    /// List all maintenances
+    List,
+    /// Get maintenance details
+    Get {
+        page_id: String,
+        maintenance_id: String,
+    },
+    /// Create a maintenance
+    Create {
+        page_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
+    },
+    /// Update a maintenance
+    Update {
+        page_id: String,
+        maintenance_id: String,
+        #[arg(long, help = "JSON file with request body (required)")]
+        file: String,
     },
 }
 
@@ -3645,6 +4489,8 @@ enum StatusPageThirdPartyActions {
 // ---- Integrations ----
 #[derive(Subcommand)]
 enum IntegrationActions {
+    /// List all configured integrations
+    List,
     /// Manage Jira integration
     Jira {
         #[command(subcommand)]
@@ -3669,6 +4515,27 @@ enum IntegrationActions {
     Webhooks {
         #[command(subcommand)]
         action: WebhooksActions,
+    },
+    /// Manage Google Chat integration
+    #[command(name = "google-chat")]
+    GoogleChat {
+        #[command(subcommand)]
+        action: GoogleChatActions,
+    },
+    /// Manage AWS integrations
+    Aws {
+        #[command(subcommand)]
+        action: IntegrationAwsActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum IntegrationAwsActions {
+    /// Manage AWS cloud authentication
+    #[command(name = "cloud-auth")]
+    CloudAuth {
+        #[command(subcommand)]
+        action: CloudAuthActions,
     },
 }
 
@@ -3809,6 +4676,50 @@ enum WebhooksActions {
     List,
 }
 
+// ---- Containers ----
+#[derive(Subcommand)]
+enum ContainerActions {
+    /// List running containers
+    List {
+        /// Comma-separated list of tags to filter containers by
+        #[arg(long)]
+        filter_tags: Option<String>,
+        /// Comma-separated list of tags to group containers by
+        #[arg(long)]
+        group_by: Option<String>,
+        /// Attribute to sort containers by
+        #[arg(long)]
+        sort: Option<String>,
+        /// Maximum number of results returned
+        #[arg(long)]
+        page_size: Option<i32>,
+    },
+    /// Manage container images
+    Images {
+        #[command(subcommand)]
+        action: ContainerImageActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum ContainerImageActions {
+    /// List container images
+    List {
+        /// Comma-separated list of tags to filter container images by
+        #[arg(long)]
+        filter_tags: Option<String>,
+        /// Comma-separated list of tags to group container images by
+        #[arg(long)]
+        group_by: Option<String>,
+        /// Attribute to sort container images by
+        #[arg(long)]
+        sort: Option<String>,
+        /// Maximum number of results returned
+        #[arg(long)]
+        page_size: Option<i32>,
+    },
+}
+
 // ---- Cost ----
 #[derive(Subcommand)]
 enum CostActions {
@@ -3836,6 +4747,45 @@ enum CostActions {
         end: Option<String>,
         #[arg(long, help = "Tag keys for breakdown (required)")]
         fields: Option<String>,
+    },
+    /// Manage AWS CUR cloud cost configs
+    #[command(name = "aws-config")]
+    AwsConfig {
+        #[command(subcommand)]
+        action: CostCloudConfigActions,
+    },
+    /// Manage Azure UC cloud cost configs
+    #[command(name = "azure-config")]
+    AzureConfig {
+        #[command(subcommand)]
+        action: CostCloudConfigActions,
+    },
+    /// Manage GCP usage cost configs
+    #[command(name = "gcp-config")]
+    GcpConfig {
+        #[command(subcommand)]
+        action: CostCloudConfigActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum CostCloudConfigActions {
+    /// List cloud cost configs
+    List,
+    /// Get a specific cloud cost config by ID
+    Get {
+        #[arg(help = "Cloud account ID")]
+        id: i64,
+    },
+    /// Create a cloud cost config from a JSON file
+    Create {
+        #[arg(long, help = "JSON file with config body (required)")]
+        file: String,
+    },
+    /// Delete a cloud cost config by ID
+    Delete {
+        #[arg(help = "Cloud account ID")]
+        id: i64,
     },
 }
 
@@ -3880,6 +4830,11 @@ enum ApmActions {
         to: String,
         #[arg(long, help = "Environment filter")]
         env: Option<String>,
+    },
+    /// Troubleshoot APM instrumentation issues
+    Troubleshooting {
+        #[command(subcommand)]
+        action: ApmTroubleshootingActions,
     },
 }
 
@@ -3979,6 +4934,17 @@ enum ApmDependencyActions {
     },
 }
 
+#[derive(Subcommand)]
+enum ApmTroubleshootingActions {
+    /// List instrumentation errors for a host
+    List {
+        #[arg(long, help = "Hostname to query (required)")]
+        hostname: String,
+        #[arg(long, help = "Time window (e.g. 4h, 24h, 1h30m)")]
+        timeframe: Option<String>,
+    },
+}
+
 // ---- Investigations ----
 #[derive(Subcommand)]
 enum InvestigationActions {
@@ -4030,10 +4996,15 @@ enum NetworkActions {
         #[command(subcommand)]
         action: NetworkFlowActions,
     },
-    /// List network devices
+    /// Manage network devices
     Devices {
         #[command(subcommand)]
         action: NetworkDeviceActions,
+    },
+    /// Manage network interface tags
+    Interfaces {
+        #[command(subcommand)]
+        action: NetworkInterfaceTagActions,
     },
 }
 
@@ -4047,15 +5018,273 @@ enum NetworkFlowActions {
 enum NetworkDeviceActions {
     /// List network devices
     List,
+    /// Get device details
+    Get { device_id: String },
+    /// List interfaces for a device
+    Interfaces {
+        device_id: String,
+        #[arg(long, help = "Include IP addresses")]
+        ip_addresses: bool,
+    },
+    /// Manage device tags
+    Tags {
+        #[command(subcommand)]
+        action: NetworkDeviceTagActions,
+    },
 }
 
-// ---- Obs Pipelines (placeholder) ----
+#[derive(Subcommand)]
+enum NetworkDeviceTagActions {
+    /// List tags for a device
+    List { device_id: String },
+    /// Update tags for a device
+    Update {
+        device_id: String,
+        #[arg(long, help = "JSON file with tags body (required)")]
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum NetworkInterfaceTagActions {
+    /// List tags for an interface
+    List { interface_id: String },
+    /// Update tags for an interface
+    Update {
+        interface_id: String,
+        #[arg(long, help = "JSON file with tags body (required)")]
+        file: String,
+    },
+}
+
+// ---- Obs Pipelines ----
 #[derive(Subcommand)]
 enum ObsPipelinesActions {
     /// List observability pipelines
-    List,
+    List {
+        #[arg(
+            long,
+            default_value = "50",
+            help = "Maximum number of pipelines to return"
+        )]
+        limit: i64,
+    },
     /// Get pipeline details
     Get { pipeline_id: String },
+    /// Create a new pipeline from a JSON file
+    Create {
+        #[arg(long, help = "JSON file with pipeline spec body (required)")]
+        file: String,
+    },
+    /// Update an existing pipeline from a JSON file
+    Update {
+        pipeline_id: String,
+        #[arg(long, help = "JSON file with pipeline body (required)")]
+        file: String,
+    },
+    /// Delete a pipeline
+    Delete { pipeline_id: String },
+    /// Validate a pipeline configuration without creating it
+    Validate {
+        #[arg(long, help = "JSON file with pipeline spec body (required)")]
+        file: String,
+    },
+}
+
+// ---- LLM Observability ----
+#[derive(Subcommand)]
+enum LlmObsActions {
+    /// Manage LLM Observability projects
+    Projects {
+        #[command(subcommand)]
+        action: LlmObsProjectsActions,
+    },
+    /// Manage LLM Observability experiments
+    Experiments {
+        #[command(subcommand)]
+        action: LlmObsExperimentsActions,
+    },
+    /// Manage LLM Observability datasets
+    Datasets {
+        #[command(subcommand)]
+        action: LlmObsDatasetsActions,
+    },
+    /// Search LLM Observability spans
+    Spans {
+        #[command(subcommand)]
+        action: LlmObsSpansActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmObsProjectsActions {
+    /// Create a new LLM Obs project
+    Create {
+        #[arg(long, help = "JSON file with project body (required)")]
+        file: String,
+    },
+    /// List LLM Obs projects
+    List,
+}
+
+#[derive(Subcommand)]
+enum LlmObsExperimentsActions {
+    /// Create a new LLM Obs experiment
+    Create {
+        #[arg(long, help = "JSON file with experiment body (required)")]
+        file: String,
+    },
+    /// List LLM Obs experiments
+    List {
+        #[arg(long, help = "Filter by project ID")]
+        filter_project_id: Option<String>,
+        #[arg(long, help = "Filter by dataset ID")]
+        filter_dataset_id: Option<String>,
+    },
+    /// Update an existing LLM Obs experiment
+    Update {
+        experiment_id: String,
+        #[arg(long, help = "JSON file with experiment update body (required)")]
+        file: String,
+    },
+    /// Delete LLM Obs experiments (provide IDs in a JSON file)
+    Delete {
+        #[arg(long, help = "JSON file with experiment IDs to delete (required)")]
+        file: String,
+    },
+    /// Get a summary of an experiment (event counts, metrics, available dimensions)
+    Summary { experiment_id: String },
+    /// Query events from an experiment with optional filtering and sorting
+    Events {
+        #[command(subcommand)]
+        action: LlmObsExperimentsEventsActions,
+    },
+    /// Get metric stats for an experiment, optionally segmented by a dimension
+    #[command(name = "metric-values")]
+    MetricValues {
+        experiment_id: String,
+        #[arg(long, help = "Metric label to query (required)")]
+        metric_label: String,
+        #[arg(long, help = "Dimension to segment results by")]
+        segment_by_dimension: Option<String>,
+        #[arg(long, help = "Filter to a specific dimension value")]
+        segment_dimension_value: Option<String>,
+    },
+    /// Get unique values for a dimension across experiment events
+    #[command(name = "dimension-values")]
+    DimensionValues {
+        experiment_id: String,
+        #[arg(long, help = "Dimension key to enumerate values for (required)")]
+        dimension_key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmObsExperimentsEventsActions {
+    /// List events for an experiment with optional filtering and sorting
+    List {
+        experiment_id: String,
+        #[arg(long, default_value = "20", help = "Number of events to return")]
+        limit: u32,
+        #[arg(long, default_value = "0", help = "Offset for pagination")]
+        offset: u32,
+        #[arg(long, help = "Filter by dimension key")]
+        filter_dimension_key: Option<String>,
+        #[arg(
+            long,
+            help = "Filter by dimension value (use with --filter-dimension-key)"
+        )]
+        filter_dimension_value: Option<String>,
+        #[arg(long, help = "Filter by metric label")]
+        filter_metric_label: Option<String>,
+        #[arg(long, help = "Sort by metric label")]
+        sort_by_metric: Option<String>,
+        #[arg(long, default_value = "desc", help = "Sort direction: asc or desc")]
+        sort_direction: String,
+    },
+    /// Get a single event from an experiment by ID
+    Get {
+        experiment_id: String,
+        event_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmObsSpansActions {
+    /// Search LLM Observability spans
+    Search {
+        #[arg(long, help = "Search query string")]
+        query: Option<String>,
+        #[arg(long, help = "Filter by trace ID")]
+        trace_id: Option<String>,
+        #[arg(long, help = "Filter by span ID")]
+        span_id: Option<String>,
+        #[arg(
+            long,
+            help = "Filter by span kind (llm, retrieval, embedding, agent, tool, task, workflow)"
+        )]
+        span_kind: Option<String>,
+        #[arg(long, help = "Filter by span name")]
+        span_name: Option<String>,
+        #[arg(long, help = "Filter by ML app name")]
+        ml_app: Option<String>,
+        #[arg(long, help = "Return only root spans")]
+        root_spans_only: bool,
+        #[arg(long, help = "Start time (relative like '1h' or RFC3339)")]
+        from: Option<String>,
+        #[arg(long, help = "End time (relative like 'now' or RFC3339)")]
+        to: Option<String>,
+        #[arg(long, default_value = "20", help = "Number of spans to return")]
+        limit: u32,
+        #[arg(long, help = "Pagination cursor from a previous response")]
+        cursor: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmObsDatasetsActions {
+    /// Create a new LLM Obs dataset
+    Create {
+        #[arg(long, help = "Project ID (required)")]
+        project_id: String,
+        #[arg(long, help = "JSON file with dataset body (required)")]
+        file: String,
+    },
+    /// List LLM Obs datasets for a project
+    List {
+        #[arg(long, help = "Project ID (required)")]
+        project_id: String,
+    },
+}
+
+// ---- Reference Tables ----
+#[derive(Subcommand)]
+enum ReferenceTablesActions {
+    /// List reference tables
+    List {
+        #[arg(
+            long,
+            default_value = "50",
+            help = "Maximum number of tables to return"
+        )]
+        limit: i64,
+    },
+    /// Get a reference table by ID
+    Get {
+        #[arg(help = "Table ID")]
+        table_id: String,
+    },
+    /// Create a reference table from a JSON file
+    Create {
+        #[arg(long, help = "JSON file with table body (required)")]
+        file: String,
+    },
+    /// Batch query reference table rows by primary key
+    #[command(name = "batch-query")]
+    BatchQuery {
+        #[arg(long, help = "JSON file with batch query body (required)")]
+        file: String,
+    },
 }
 
 // ---- Scorecards (placeholder) ----
@@ -4158,6 +5387,51 @@ enum TracesActions {
     },
 }
 
+// ---- ACP ----
+#[derive(Subcommand)]
+enum AcpActions {
+    /// Start an ACP server that delegates to Datadog Bits AI
+    ///
+    /// Spawns a local HTTP server implementing the Agent Communication Protocol (ACP).
+    /// Requests are proxied to the Datadog Bits AI agent endpoint
+    /// (/api/unstable/lassie-ng/v1/agents/{id}/messages).
+    ///
+    /// Endpoints served:
+    ///   GET  /agent.json       — ACP agent card
+    ///   POST /runs             — synchronous run
+    ///   POST /runs/stream      — streaming run (SSE)
+    ///
+    /// EXAMPLES:
+    ///   # Start on default port 9099 (auto-discovers first agent)
+    ///   pup acp serve
+    ///
+    ///   # Start with a specific agent ID
+    ///   pup acp serve --agent-id <uuid>
+    ///
+    ///   # Start on a custom port
+    ///   pup acp serve --port 8080
+    #[command(verbatim_doc_comment)]
+    Serve {
+        #[arg(
+            long,
+            default_value_t = commands::acp::DEFAULT_PORT,
+            help = "Port to listen on"
+        )]
+        port: u16,
+        #[arg(
+            long,
+            default_value = commands::acp::DEFAULT_HOST,
+            help = "Host address to bind to"
+        )]
+        host: String,
+        #[arg(
+            long,
+            help = "Datadog Bits AI agent ID to proxy (auto-discovered if omitted)"
+        )]
+        agent_id: Option<String>,
+    },
+}
+
 // ---- Agent (placeholder) ----
 #[derive(Subcommand)]
 enum AgentActions {
@@ -4190,6 +5464,37 @@ enum AliasActions {
     },
 }
 
+// ---- Skills ----
+#[derive(Subcommand)]
+enum SkillsActions {
+    /// List available skills and agents
+    List {
+        /// Filter by type: skill, agent
+        #[arg(long = "type", name = "type")]
+        entry_type: Option<String>,
+    },
+    /// Install skills for the detected AI coding assistant
+    Install {
+        /// Install a specific skill or agent by name
+        name: Option<String>,
+        /// Override detected AI agent (claude-code, cursor, codex, windsurf, gemini-code)
+        #[arg(long = "target-agent")]
+        target_agent: Option<String>,
+        /// Override install directory
+        #[arg(long)]
+        dir: Option<String>,
+        /// Filter by type: skill, agent
+        #[arg(long = "type", name = "type")]
+        entry_type: Option<String>,
+    },
+    /// Show where skills would be installed
+    Path {
+        /// Override detected AI agent
+        #[arg(long = "target-agent")]
+        target_agent: Option<String>,
+    },
+}
+
 // ---- Product Analytics ----
 #[derive(Subcommand)]
 enum ProductAnalyticsActions {
@@ -4197,6 +5502,25 @@ enum ProductAnalyticsActions {
     Events {
         #[command(subcommand)]
         action: ProductAnalyticsEventActions,
+    },
+    /// Run product analytics queries
+    Query {
+        #[command(subcommand)]
+        action: ProductAnalyticsQueryActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProductAnalyticsQueryActions {
+    /// Compute scalar analytics
+    Scalar {
+        #[arg(long, help = "JSON file with query body (required)")]
+        file: String,
+    },
+    /// Compute timeseries analytics
+    Timeseries {
+        #[arg(long, help = "JSON file with query body (required)")]
+        file: String,
     },
 }
 
@@ -4339,15 +5663,36 @@ enum StaticAnalysisCoverageActions {
 #[derive(Subcommand)]
 enum AuthActions {
     /// Login via OAuth2
-    Login,
+    Login {
+        /// Comma-separated OAuth scopes to request (e.g. dashboards_read,metrics_read).
+        /// Overrides profile and config file scopes. Unknown scopes are skipped with a warning.
+        #[arg(long, value_name = "SCOPES")]
+        scopes: Option<String>,
+        /// Request only read-only scopes (excludes write, manage, and org-level scopes).
+        /// Shorthand: --ro
+        #[arg(long, alias = "ro", visible_alias = "ro")]
+        read_only: bool,
+        /// Datadog site to authenticate against (e.g. datadoghq.eu, us3.datadoghq.com).
+        /// Overrides DD_SITE env var and config file. Defaults to datadoghq.com.
+        #[arg(long, value_name = "SITE")]
+        site: Option<String>,
+    },
     /// Logout and clear tokens
     Logout,
     /// Check authentication status
-    Status,
-    /// Print access token
+    Status {
+        /// Datadog site to check status for (e.g. datadoghq.eu, us3.datadoghq.com).
+        /// Overrides DD_SITE env var and config file. Defaults to datadoghq.com.
+        #[arg(long, value_name = "SITE")]
+        site: Option<String>,
+    },
+    /// Print access token (debug builds only)
+    #[cfg(debug_assertions)]
     Token,
     /// Refresh access token
     Refresh,
+    /// List all stored org sessions
+    List,
 }
 
 // ---- Agent-mode JSON schema for --help ----
@@ -4400,10 +5745,16 @@ fn build_agent_schema_scoped(
                 "description": "Enable agent mode (auto-detected for AI coding assistants)"
             },
             {
+                "name": "--org",
+                "type": "string",
+                "default": null,
+                "description": "Named org session for multi-org support (see 'pup auth login --org')"
+            },
+            {
                 "name": "--output",
                 "type": "string",
                 "default": "json",
-                "description": "Output format (json, table, yaml)"
+                "description": "Output format (json, table, yaml, csv)"
             },
             {
                 "name": "--yes",
@@ -4514,10 +5865,16 @@ fn build_agent_schema(cmd: &clap::Command) -> serde_json::Value {
                 "description": "Enable agent mode (auto-detected for AI coding assistants)"
             },
             {
+                "name": "--org",
+                "type": "string",
+                "default": null,
+                "description": "Named org session for multi-org support (see 'pup auth login --org')"
+            },
+            {
                 "name": "--output",
                 "type": "string",
                 "default": "json",
-                "description": "Output format (json, table, yaml)"
+                "description": "Output format (json, table, yaml, csv)"
             },
             {
                 "name": "--yes",
@@ -4698,6 +6055,39 @@ fn build_compact_agent_schema(cmd: &clap::Command) -> serde_json::Value {
     serde_json::Value::Object(root)
 }
 
+/// Returns true if a leaf subcommand name represents a write (mutating) operation.
+/// Used by both the read-only runtime guard and the agent JSON schema.
+pub(crate) fn is_write_command_name(name: &str) -> bool {
+    name == "delete"
+        || name == "create"
+        || name == "update"
+        || name == "cancel"
+        || name == "trigger"
+        || name == "set"
+        || name == "add"
+        || name == "remove"
+        || name == "assign"
+        || name == "archive"
+        || name == "unarchive"
+        || name == "activate"
+        || name == "deactivate"
+        || name == "move"
+        || name == "link"
+        || name == "unlink"
+        || name == "configure"
+        || name == "upgrade"
+        || name.starts_with("update-")
+        || name.starts_with("create-")
+        || name == "submit"
+        || name == "send"
+        || name == "import"
+        || name == "register"
+        || name == "unregister"
+        || name.contains("delete")
+        || name == "patch"
+        || name.starts_with("patch-")
+}
+
 fn build_command_schema(cmd: &clap::Command, parent_path: &str) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     let name = cmd.get_name().to_string();
@@ -4716,28 +6106,7 @@ fn build_command_schema(cmd: &clap::Command, parent_path: &str) -> serde_json::V
 
     // Determine read_only based on command name — but only emit for leaf commands
     // (commands with no subcommands), matching Go behavior
-    let is_write = name == "delete"
-        || name == "create"
-        || name == "update"
-        || name == "cancel"
-        || name == "trigger"
-        || name == "set"
-        || name == "add"
-        || name == "remove"
-        || name == "assign"
-        || name == "archive"
-        || name == "unarchive"
-        || name == "activate"
-        || name == "deactivate"
-        || name.starts_with("update-")
-        || name.starts_with("create-")
-        || name == "submit"
-        || name == "send"
-        || name == "import"
-        || name == "register"
-        || name == "unregister"
-        || name.contains("delete")
-        || name.contains("patch");
+    let is_write = is_write_command_name(&name);
 
     // Flags (named --flags only, excluding positional args and globals)
     let flags: Vec<serde_json::Value> = cmd
@@ -4827,6 +6196,83 @@ async fn main() -> anyhow::Result<()> {
     main_inner().await
 }
 
+pub(crate) fn get_leaf_subcommand_name(matches: &clap::ArgMatches) -> Option<String> {
+    match matches.subcommand() {
+        Some((name, sub_matches)) => {
+            get_leaf_subcommand_name(sub_matches).or(Some(name.to_string()))
+        }
+        None => None,
+    }
+}
+
+pub(crate) fn get_top_level_subcommand_name(matches: &clap::ArgMatches) -> Option<String> {
+    matches.subcommand().map(|(name, _)| name.to_string())
+}
+
+/// Resolve OAuth scopes for `pup auth login`.
+///
+/// Priority: CLI --scopes > config profile scopes > config top-level scopes > defaults.
+/// Unknown scopes (not in the known list) are warned and excluded.
+/// In --read-only mode, defaults/profile scopes are filtered to read-only-safe scopes;
+/// explicitly-provided --scopes are passed through as-is (user intent is explicit).
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_login_scopes(
+    cli_scopes: Option<&str>,
+    org: Option<&str>,
+    read_only: bool,
+) -> Vec<String> {
+    use crate::auth::types::{all_known_scopes, default_scopes, read_only_scopes};
+
+    if let Some(raw) = cli_scopes {
+        // User explicitly specified scopes — validate against known list, warn on unknowns
+        let known: std::collections::HashSet<&str> = all_known_scopes().into_iter().collect();
+        let mut result = Vec::new();
+        for scope in crate::config::parse_scopes(raw) {
+            if known.contains(scope.as_str()) {
+                result.push(scope);
+            } else {
+                eprintln!("⚠️  Unknown scope ignored: {scope}");
+            }
+        }
+        return result;
+    }
+
+    // Load from config file (per-org profile, then top-level scopes)
+    if let Some(configured) = crate::config::load_configured_scopes(org) {
+        let known: std::collections::HashSet<&str> = all_known_scopes().into_iter().collect();
+        let mut result = Vec::new();
+        for scope in &configured {
+            if known.contains(scope.as_str()) {
+                if !read_only || read_only_scopes().contains(&scope.as_str()) {
+                    result.push(scope.clone());
+                }
+            } else {
+                eprintln!("⚠️  Unknown scope in config ignored: {scope}");
+            }
+        }
+        return result;
+    }
+
+    // Default scopes, filtered for read-only if needed
+    if read_only {
+        read_only_scopes().into_iter().map(String::from).collect()
+    } else {
+        default_scopes().into_iter().map(String::from).collect()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn resolve_login_scopes(
+    _cli_scopes: Option<&str>,
+    _org: Option<&str>,
+    _read_only: bool,
+) -> Vec<String> {
+    crate::auth::types::default_scopes()
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
 async fn main_inner() -> anyhow::Result<()> {
     // In agent mode, intercept --help to return a JSON schema instead of plain text.
     let args: Vec<String> = std::env::args().collect();
@@ -4854,7 +6300,26 @@ async fn main_inner() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+
+    // Handle commands that do not require authentication before Config::from_env() so
+    // that sourcing completions in a shell rc (e.g. `source <(pup completions bash)`)
+    // never triggers a token refresh or prints auth-related messages.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Commands::Completions { shell, install } = cli.command {
+        if install {
+            commands::completions::install(shell)?;
+        } else {
+            commands::completions::generate(shell);
+        }
+        return Ok(());
+    }
+    if let Commands::Version = cli.command {
+        println!("{}", version::build_info());
+        return Ok(());
+    }
+
     let mut cfg = config::Config::from_env()?;
 
     // Apply flag overrides
@@ -4867,6 +6332,42 @@ async fn main_inner() -> anyhow::Result<()> {
     cfg.agent_mode = cli.agent || useragent::is_agent_mode();
     if cfg.agent_mode {
         cfg.auto_approve = true;
+    }
+    // Apply --org flag (higher priority than DD_ORG env var / config file)
+    if let Some(org) = cli.org {
+        cfg.org = Some(org);
+        // Reload token from storage for this org, unless DD_ACCESS_TOKEN was explicitly set
+        #[cfg(all(not(feature = "browser"), not(target_arch = "wasm32")))]
+        if std::env::var("DD_ACCESS_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            cfg.access_token = config::load_token_from_storage(&cfg.site, cfg.org.as_deref());
+        }
+    }
+
+    if cli.read_only {
+        cfg.read_only = true;
+    }
+    if cfg.read_only {
+        let top = get_top_level_subcommand_name(&matches);
+        let is_local_only = matches!(
+            top.as_deref(),
+            Some("auth") | Some("alias") | Some("skills")
+        );
+        if !is_local_only {
+            if let Some(leaf) = get_leaf_subcommand_name(&matches) {
+                if is_write_command_name(&leaf) {
+                    anyhow::bail!(
+                        "write operation '{}' is blocked in read-only mode \
+                         (--read-only flag, DD_READ_ONLY / DD_CLI_READ_ONLY env var, \
+                         or read_only: true in config file)",
+                        leaf
+                    );
+                }
+            }
+        }
     }
 
     match cli.command {
@@ -4903,43 +6404,62 @@ async fn main_inner() -> anyhow::Result<()> {
                     from,
                     to,
                     limit,
-                    sort: _,
+                    sort,
                     index: _,
-                    storage: _,
+                    storage,
                 } => {
-                    commands::logs::search(&cfg, query, from, to, limit).await?;
+                    commands::logs::search(&cfg, query, from, to, limit, sort, storage).await?;
                 }
                 LogActions::List {
                     query,
                     from,
                     to,
                     limit,
-                    sort: _,
-                    storage: _,
+                    sort,
+                    storage,
                 } => {
-                    commands::logs::list(&cfg, query, from, to, limit).await?;
+                    commands::logs::list(&cfg, query, from, to, limit, sort, storage).await?;
                 }
                 LogActions::Query {
                     query,
                     from,
                     to,
                     limit,
-                    sort: _,
-                    storage: _,
+                    sort,
+                    storage,
                     timezone: _,
                 } => {
-                    commands::logs::query(&cfg, query, from, to, limit).await?;
+                    commands::logs::query(&cfg, query, from, to, limit, sort, storage).await?;
                 }
                 LogActions::Aggregate {
                     query,
                     from,
                     to,
-                    compute: _,
-                    group_by: _,
-                    limit: _,
-                    storage: _,
+                    compute,
+                    group_by,
+                    limit,
+                    storage,
                 } => {
-                    commands::logs::aggregate(&cfg, query.unwrap_or_default(), from, to).await?;
+                    commands::logs::aggregate(
+                        &cfg,
+                        commands::logs::AggregateArgs {
+                            query: query.unwrap_or_default(),
+                            from,
+                            to,
+                            compute: commands::logs::split_compute_args(&compute),
+                            group_by: group_by
+                                .map(|g| {
+                                    g.split(',')
+                                        .map(|s| s.trim().to_string())
+                                        .filter(|s| !s.is_empty())
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            limit,
+                            storage,
+                        },
+                    )
+                    .await?;
                 }
                 LogActions::Archives { action } => match action {
                     LogArchiveActions::List => commands::logs::archives_list(&cfg).await?,
@@ -5040,6 +6560,9 @@ async fn main_inner() -> anyhow::Result<()> {
                             .await?;
                     }
                 },
+                IncidentActions::Import { file } => {
+                    commands::incidents::import(&cfg, &file).await?;
+                }
             }
         }
         // --- Dashboards ---
@@ -5123,14 +6646,39 @@ async fn main_inner() -> anyhow::Result<()> {
             cfg.validate_auth()?;
             match action {
                 SyntheticsActions::Tests { action } => match action {
-                    SyntheticsTestActions::List { .. } => {
-                        commands::synthetics::tests_list(&cfg).await?
-                    }
+                    SyntheticsTestActions::List {
+                        page_size,
+                        page_number,
+                    } => commands::synthetics::tests_list(&cfg, page_size, page_number).await?,
                     SyntheticsTestActions::Get { public_id } => {
                         commands::synthetics::tests_get(&cfg, &public_id).await?;
                     }
-                    SyntheticsTestActions::Search { text, count, start } => {
-                        commands::synthetics::tests_search(&cfg, text, count, start).await?;
+                    SyntheticsTestActions::Search {
+                        text,
+                        facets_only,
+                        include_full_config,
+                        count,
+                        start,
+                        sort,
+                    } => {
+                        commands::synthetics::tests_search(
+                            &cfg,
+                            text,
+                            facets_only,
+                            include_full_config,
+                            count,
+                            start,
+                            sort,
+                        )
+                        .await?;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    SyntheticsTestActions::Run {
+                        public_ids,
+                        tunnel,
+                        timeout,
+                    } => {
+                        commands::synthetics::tests_run(&cfg, public_ids, tunnel, timeout).await?;
                     }
                 },
                 SyntheticsActions::Locations { action } => match action {
@@ -5217,6 +6765,19 @@ async fn main_inner() -> anyhow::Result<()> {
                 UserActions::Roles { action } => match action {
                     UserRoleActions::List => commands::users::roles_list(&cfg).await?,
                 },
+                UserActions::Seats { action } => match action {
+                    SeatsActions::Users { action } => match action {
+                        SeatsUserActions::List { product, limit } => {
+                            commands::seats::users_list(&cfg, &product, limit).await?;
+                        }
+                        SeatsUserActions::Assign { file } => {
+                            commands::seats::users_assign(&cfg, &file).await?;
+                        }
+                        SeatsUserActions::Unassign { file } => {
+                            commands::seats::users_unassign(&cfg, &file).await?;
+                        }
+                    },
+                },
             }
         }
         // --- Infrastructure ---
@@ -5235,6 +6796,27 @@ async fn main_inner() -> anyhow::Result<()> {
                         commands::infrastructure::hosts_get(&cfg, &hostname).await?;
                     }
                 },
+            }
+        }
+        // --- IDP (Internal Developer Portal) ---
+        Commands::Idp { action } => {
+            cfg.validate_auth()?;
+            match action {
+                IdpActions::Assist { entity } => {
+                    commands::idp::assist(&cfg, &entity).await?;
+                }
+                IdpActions::Find { query } => {
+                    commands::idp::find(&cfg, &query).await?;
+                }
+                IdpActions::Owner { entity } => {
+                    commands::idp::owner(&cfg, &entity).await?;
+                }
+                IdpActions::Deps { entity } => {
+                    commands::idp::deps(&cfg, &entity).await?;
+                }
+                IdpActions::Register { file } => {
+                    commands::idp::register(&cfg, &file).await?;
+                }
             }
         }
         // --- Audit Logs ---
@@ -5259,8 +6841,8 @@ async fn main_inner() -> anyhow::Result<()> {
             cfg.validate_auth()?;
             match action {
                 SecurityActions::Rules { action } => match action {
-                    SecurityRuleActions::List { .. } => {
-                        commands::security::rules_list(&cfg).await?
+                    SecurityRuleActions::List { sort, .. } => {
+                        commands::security::rules_list(&cfg, sort).await?
                     }
                     SecurityRuleActions::Get { rule_id } => {
                         commands::security::rules_get(&cfg, &rule_id).await?;
@@ -5301,6 +6883,30 @@ async fn main_inner() -> anyhow::Result<()> {
                         commands::security::risk_scores_list(&cfg, query).await?;
                     }
                 },
+                SecurityActions::Suppressions { action } => match action {
+                    SecuritySuppressionActions::List { sort } => {
+                        commands::security::suppressions_list(&cfg, sort).await?;
+                    }
+                    SecuritySuppressionActions::Get { suppression_id } => {
+                        commands::security::suppressions_get(&cfg, &suppression_id).await?;
+                    }
+                    SecuritySuppressionActions::Create { file } => {
+                        commands::security::suppressions_create(&cfg, &file).await?;
+                    }
+                    SecuritySuppressionActions::Update {
+                        suppression_id,
+                        file,
+                    } => {
+                        commands::security::suppressions_update(&cfg, &suppression_id, &file)
+                            .await?;
+                    }
+                    SecuritySuppressionActions::Delete { suppression_id } => {
+                        commands::security::suppressions_delete(&cfg, &suppression_id).await?;
+                    }
+                    SecuritySuppressionActions::Validate { file } => {
+                        commands::security::suppressions_validate(&cfg, &file).await?;
+                    }
+                },
             }
         }
         // --- Organizations ---
@@ -5309,6 +6915,57 @@ async fn main_inner() -> anyhow::Result<()> {
             match action {
                 OrgActions::List => commands::organizations::list(&cfg).await?,
                 OrgActions::Get => commands::organizations::get(&cfg).await?,
+            }
+        }
+        // --- Change Management ---
+        Commands::ChangeManagement { action } => {
+            cfg.validate_auth()?;
+            match action {
+                ChangeManagementActions::Create { file } => {
+                    commands::change_management::create(&cfg, &file).await?;
+                }
+                ChangeManagementActions::Get { change_request_id } => {
+                    commands::change_management::get(&cfg, &change_request_id).await?;
+                }
+                ChangeManagementActions::Update {
+                    change_request_id,
+                    file,
+                } => {
+                    commands::change_management::update(&cfg, &change_request_id, &file).await?;
+                }
+                ChangeManagementActions::CreateBranch {
+                    change_request_id,
+                    file,
+                } => {
+                    commands::change_management::create_branch(&cfg, &change_request_id, &file)
+                        .await?;
+                }
+                ChangeManagementActions::Decisions { action } => match action {
+                    ChangeRequestDecisionActions::Delete {
+                        change_request_id,
+                        decision_id,
+                    } => {
+                        commands::change_management::delete_decision(
+                            &cfg,
+                            &change_request_id,
+                            &decision_id,
+                        )
+                        .await?;
+                    }
+                    ChangeRequestDecisionActions::Update {
+                        change_request_id,
+                        decision_id,
+                        file,
+                    } => {
+                        commands::change_management::update_decision(
+                            &cfg,
+                            &change_request_id,
+                            &decision_id,
+                            &file,
+                        )
+                        .await?;
+                    }
+                },
             }
         }
         // --- Cloud ---
@@ -5496,6 +7153,36 @@ async fn main_inner() -> anyhow::Result<()> {
                 }
                 ApiKeyActions::Delete { key_id } => {
                     commands::api_keys::delete(&cfg, &key_id).await?;
+                }
+            }
+        }
+        // --- App Builder ---
+        Commands::AppBuilder { action } => {
+            cfg.validate_auth()?;
+            match action {
+                AppBuilderActions::List { query } => {
+                    commands::app_builder::list(&cfg, query.as_deref()).await?;
+                }
+                AppBuilderActions::Get { app_id } => {
+                    commands::app_builder::get(&cfg, &app_id).await?;
+                }
+                AppBuilderActions::Create { file } => {
+                    commands::app_builder::create(&cfg, &file).await?;
+                }
+                AppBuilderActions::Update { app_id, file } => {
+                    commands::app_builder::update(&cfg, &app_id, &file).await?;
+                }
+                AppBuilderActions::Delete { app_id } => {
+                    commands::app_builder::delete(&cfg, &app_id).await?;
+                }
+                AppBuilderActions::DeleteBatch { app_ids } => {
+                    commands::app_builder::delete_batch(&cfg, &app_ids).await?;
+                }
+                AppBuilderActions::Publish { app_id } => {
+                    commands::app_builder::publish(&cfg, &app_id).await?;
+                }
+                AppBuilderActions::Unpublish { app_id } => {
+                    commands::app_builder::unpublish(&cfg, &app_id).await?;
                 }
             }
         }
@@ -5730,8 +7417,22 @@ async fn main_inner() -> anyhow::Result<()> {
                     }
                 },
                 CicdActions::FlakyTests { action } => match action {
-                    CicdFlakyTestActions::Search { query, .. } => {
-                        commands::cicd::flaky_tests_search(&cfg, query).await?;
+                    CicdFlakyTestActions::Search {
+                        query,
+                        cursor,
+                        limit,
+                        include_history,
+                        sort,
+                    } => {
+                        commands::cicd::flaky_tests_search(
+                            &cfg,
+                            query,
+                            cursor,
+                            limit,
+                            include_history,
+                            sort,
+                        )
+                        .await?;
                     }
                     CicdFlakyTestActions::Update { file } => {
                         commands::cicd::flaky_tests_update(&cfg, &file).await?;
@@ -5795,8 +7496,8 @@ async fn main_inner() -> anyhow::Result<()> {
             cfg.validate_auth()?;
             match action {
                 FleetActions::Agents { action } => match action {
-                    FleetAgentActions::List { page_size } => {
-                        commands::fleet::agents_list(&cfg, page_size).await?;
+                    FleetAgentActions::List { page_size, filter } => {
+                        commands::fleet::agents_list(&cfg, page_size, filter).await?;
                     }
                     FleetAgentActions::Get { agent_key } => {
                         commands::fleet::agents_get(&cfg, &agent_key).await?;
@@ -5858,8 +7559,15 @@ async fn main_inner() -> anyhow::Result<()> {
             cfg.validate_auth()?;
             match action {
                 ErrorTrackingActions::Issues { action } => match action {
-                    ErrorTrackingIssueActions::Search { query, limit, .. } => {
-                        commands::error_tracking::issues_search(&cfg, query, limit).await?;
+                    ErrorTrackingIssueActions::Search {
+                        query,
+                        limit,
+                        track,
+                        persona,
+                        ..
+                    } => {
+                        commands::error_tracking::issues_search(&cfg, query, limit, track, persona)
+                            .await?;
                     }
                     ErrorTrackingIssueActions::Get { issue_id } => {
                         commands::error_tracking::issues_get(&cfg, &issue_id).await?;
@@ -5893,108 +7601,117 @@ async fn main_inner() -> anyhow::Result<()> {
         }
         // --- Status Pages ---
         Commands::StatusPages { action } => match action {
-            StatusPageActions::Pages { action } => {
-                cfg.validate_api_and_app_keys()?;
-                match action {
-                    StatusPagePageActions::List => commands::status_pages::pages_list(&cfg).await?,
-                    StatusPagePageActions::Get { page_id } => {
-                        commands::status_pages::pages_get(&cfg, &page_id).await?;
-                    }
-                    StatusPagePageActions::Create { file } => {
-                        commands::status_pages::pages_create(&cfg, &file).await?;
-                    }
-                    StatusPagePageActions::Update { page_id, file } => {
-                        commands::status_pages::pages_update(&cfg, &page_id, &file).await?;
-                    }
-                    StatusPagePageActions::Delete { page_id } => {
-                        commands::status_pages::pages_delete(&cfg, &page_id).await?;
-                    }
+            StatusPageActions::Pages { action } => match action {
+                StatusPagePageActions::List => commands::status_pages::pages_list(&cfg).await?,
+                StatusPagePageActions::Get { page_id } => {
+                    commands::status_pages::pages_get(&cfg, &page_id).await?;
                 }
-            }
-            StatusPageActions::Components { action } => {
-                cfg.validate_api_and_app_keys()?;
-                match action {
-                    StatusPageComponentActions::List { page_id } => {
-                        commands::status_pages::components_list(&cfg, &page_id).await?;
-                    }
-                    StatusPageComponentActions::Get {
-                        page_id,
-                        component_id,
-                    } => {
-                        commands::status_pages::components_get(&cfg, &page_id, &component_id)
-                            .await?;
-                    }
-                    StatusPageComponentActions::Create { page_id, file } => {
-                        commands::status_pages::components_create(&cfg, &page_id, &file).await?;
-                    }
-                    StatusPageComponentActions::Update {
-                        page_id,
-                        component_id,
-                        file,
-                    } => {
-                        commands::status_pages::components_update(
-                            &cfg,
-                            &page_id,
-                            &component_id,
-                            &file,
-                        )
-                        .await?;
-                    }
-                    StatusPageComponentActions::Delete {
-                        page_id,
-                        component_id,
-                    } => {
-                        commands::status_pages::components_delete(&cfg, &page_id, &component_id)
-                            .await?;
-                    }
+                StatusPagePageActions::Create { file } => {
+                    commands::status_pages::pages_create(&cfg, &file).await?;
                 }
-            }
-            StatusPageActions::Degradations { action } => {
-                cfg.validate_api_and_app_keys()?;
-                match action {
-                    StatusPageDegradationActions::List => {
-                        commands::status_pages::degradations_list(&cfg).await?;
-                    }
-                    StatusPageDegradationActions::Get {
-                        page_id,
-                        degradation_id,
-                    } => {
-                        commands::status_pages::degradations_get(&cfg, &page_id, &degradation_id)
-                            .await?;
-                    }
-                    StatusPageDegradationActions::Create { page_id, file } => {
-                        commands::status_pages::degradations_create(&cfg, &page_id, &file).await?;
-                    }
-                    StatusPageDegradationActions::Update {
-                        page_id,
-                        degradation_id,
-                        file,
-                    } => {
-                        commands::status_pages::degradations_update(
-                            &cfg,
-                            &page_id,
-                            &degradation_id,
-                            &file,
-                        )
-                        .await?;
-                    }
-                    StatusPageDegradationActions::Delete {
-                        page_id,
-                        degradation_id,
-                    } => {
-                        commands::status_pages::degradations_delete(
-                            &cfg,
-                            &page_id,
-                            &degradation_id,
-                        )
-                        .await?;
-                    }
+                StatusPagePageActions::Update { page_id, file } => {
+                    commands::status_pages::pages_update(&cfg, &page_id, &file).await?;
                 }
-            }
+                StatusPagePageActions::Delete { page_id } => {
+                    commands::status_pages::pages_delete(&cfg, &page_id).await?;
+                }
+            },
+            StatusPageActions::Components { action } => match action {
+                StatusPageComponentActions::List { page_id } => {
+                    commands::status_pages::components_list(&cfg, &page_id).await?;
+                }
+                StatusPageComponentActions::Get {
+                    page_id,
+                    component_id,
+                } => {
+                    commands::status_pages::components_get(&cfg, &page_id, &component_id).await?;
+                }
+                StatusPageComponentActions::Create { page_id, file } => {
+                    commands::status_pages::components_create(&cfg, &page_id, &file).await?;
+                }
+                StatusPageComponentActions::Update {
+                    page_id,
+                    component_id,
+                    file,
+                } => {
+                    commands::status_pages::components_update(&cfg, &page_id, &component_id, &file)
+                        .await?;
+                }
+                StatusPageComponentActions::Delete {
+                    page_id,
+                    component_id,
+                } => {
+                    commands::status_pages::components_delete(&cfg, &page_id, &component_id)
+                        .await?;
+                }
+            },
+            StatusPageActions::Degradations { action } => match action {
+                StatusPageDegradationActions::List => {
+                    commands::status_pages::degradations_list(&cfg).await?;
+                }
+                StatusPageDegradationActions::Get {
+                    page_id,
+                    degradation_id,
+                } => {
+                    commands::status_pages::degradations_get(&cfg, &page_id, &degradation_id)
+                        .await?;
+                }
+                StatusPageDegradationActions::Create { page_id, file } => {
+                    commands::status_pages::degradations_create(&cfg, &page_id, &file).await?;
+                }
+                StatusPageDegradationActions::Update {
+                    page_id,
+                    degradation_id,
+                    file,
+                } => {
+                    commands::status_pages::degradations_update(
+                        &cfg,
+                        &page_id,
+                        &degradation_id,
+                        &file,
+                    )
+                    .await?;
+                }
+                StatusPageDegradationActions::Delete {
+                    page_id,
+                    degradation_id,
+                } => {
+                    commands::status_pages::degradations_delete(&cfg, &page_id, &degradation_id)
+                        .await?;
+                }
+            },
             StatusPageActions::ThirdParty { action } => match action {
                 StatusPageThirdPartyActions::List { active, search } => {
                     commands::status_pages::third_party_list(&cfg, search.as_deref(), active)
                         .await?;
+                }
+            },
+            StatusPageActions::Maintenances { action } => match action {
+                StatusPageMaintenanceActions::List => {
+                    commands::status_pages::maintenances_list(&cfg).await?;
+                }
+                StatusPageMaintenanceActions::Get {
+                    page_id,
+                    maintenance_id,
+                } => {
+                    commands::status_pages::maintenances_get(&cfg, &page_id, &maintenance_id)
+                        .await?;
+                }
+                StatusPageMaintenanceActions::Create { page_id, file } => {
+                    commands::status_pages::maintenances_create(&cfg, &page_id, &file).await?;
+                }
+                StatusPageMaintenanceActions::Update {
+                    page_id,
+                    maintenance_id,
+                    file,
+                } => {
+                    commands::status_pages::maintenances_update(
+                        &cfg,
+                        &page_id,
+                        &maintenance_id,
+                        &file,
+                    )
+                    .await?;
                 }
             },
         },
@@ -6002,6 +7719,9 @@ async fn main_inner() -> anyhow::Result<()> {
         Commands::Integrations { action } => {
             cfg.validate_auth()?;
             match action {
+                IntegrationActions::List => {
+                    commands::integrations::list(&cfg).await?;
+                }
                 IntegrationActions::Jira { action } => match action {
                     JiraActions::Accounts { action } => match action {
                         JiraAccountActions::List => {
@@ -6102,6 +7822,90 @@ async fn main_inner() -> anyhow::Result<()> {
                 IntegrationActions::Webhooks { action } => match action {
                     WebhooksActions::List => commands::integrations::webhooks_list(&cfg).await?,
                 },
+                IntegrationActions::GoogleChat { action } => match action {
+                    GoogleChatActions::Handles { action } => match action {
+                        GoogleChatHandleActions::List { org_id } => {
+                            commands::google_chat::handles_list(&cfg, &org_id).await?;
+                        }
+                        GoogleChatHandleActions::Get { org_id, handle_id } => {
+                            commands::google_chat::handles_get(&cfg, &org_id, &handle_id).await?;
+                        }
+                        GoogleChatHandleActions::Create { org_id, file } => {
+                            commands::google_chat::handles_create(&cfg, &org_id, &file).await?;
+                        }
+                        GoogleChatHandleActions::Update {
+                            org_id,
+                            handle_id,
+                            file,
+                        } => {
+                            commands::google_chat::handles_update(&cfg, &org_id, &handle_id, &file)
+                                .await?;
+                        }
+                        GoogleChatHandleActions::Delete { org_id, handle_id } => {
+                            commands::google_chat::handles_delete(&cfg, &org_id, &handle_id)
+                                .await?;
+                        }
+                    },
+                    GoogleChatActions::SpaceGet {
+                        domain_name,
+                        space_display_name,
+                    } => {
+                        commands::google_chat::space_get(&cfg, &domain_name, &space_display_name)
+                            .await?;
+                    }
+                },
+                IntegrationActions::Aws { action } => match action {
+                    IntegrationAwsActions::CloudAuth { action } => match action {
+                        CloudAuthActions::PersonaMappings { action } => match action {
+                            CloudAuthPersonaMappingActions::List => {
+                                commands::cloud_auth::persona_mappings_list(&cfg).await?;
+                            }
+                            CloudAuthPersonaMappingActions::Get { mapping_id } => {
+                                commands::cloud_auth::persona_mappings_get(&cfg, &mapping_id)
+                                    .await?;
+                            }
+                            CloudAuthPersonaMappingActions::Create { file } => {
+                                commands::cloud_auth::persona_mappings_create(&cfg, &file).await?;
+                            }
+                            CloudAuthPersonaMappingActions::Delete { mapping_id } => {
+                                commands::cloud_auth::persona_mappings_delete(&cfg, &mapping_id)
+                                    .await?;
+                            }
+                        },
+                    },
+                },
+            }
+        }
+        // --- Containers ---
+        Commands::Containers { action } => {
+            cfg.validate_auth()?;
+            match action {
+                ContainerActions::List {
+                    filter_tags,
+                    group_by,
+                    sort,
+                    page_size,
+                } => {
+                    commands::containers::list(&cfg, filter_tags, group_by, sort, page_size)
+                        .await?;
+                }
+                ContainerActions::Images { action } => match action {
+                    ContainerImageActions::List {
+                        filter_tags,
+                        group_by,
+                        sort,
+                        page_size,
+                    } => {
+                        commands::containers::images_list(
+                            &cfg,
+                            filter_tags,
+                            group_by,
+                            sort,
+                            page_size,
+                        )
+                        .await?;
+                    }
+                },
             }
         }
         // --- Cost ---
@@ -6119,6 +7923,44 @@ async fn main_inner() -> anyhow::Result<()> {
                 CostActions::Attribution { start, fields, .. } => {
                     commands::cost::attribution(&cfg, start, fields).await?;
                 }
+                CostActions::AwsConfig { action } => match action {
+                    CostCloudConfigActions::List => commands::cost::aws_config_list(&cfg).await?,
+                    CostCloudConfigActions::Get { id } => {
+                        commands::cost::aws_config_get(&cfg, id).await?;
+                    }
+                    CostCloudConfigActions::Create { file } => {
+                        commands::cost::aws_config_create(&cfg, &file).await?;
+                    }
+                    CostCloudConfigActions::Delete { id } => {
+                        commands::cost::aws_config_delete(&cfg, id).await?;
+                    }
+                },
+                CostActions::AzureConfig { action } => match action {
+                    CostCloudConfigActions::List => {
+                        commands::cost::azure_config_list(&cfg).await?;
+                    }
+                    CostCloudConfigActions::Get { id } => {
+                        commands::cost::azure_config_get(&cfg, id).await?;
+                    }
+                    CostCloudConfigActions::Create { file } => {
+                        commands::cost::azure_config_create(&cfg, &file).await?;
+                    }
+                    CostCloudConfigActions::Delete { id } => {
+                        commands::cost::azure_config_delete(&cfg, id).await?;
+                    }
+                },
+                CostActions::GcpConfig { action } => match action {
+                    CostCloudConfigActions::List => commands::cost::gcp_config_list(&cfg).await?,
+                    CostCloudConfigActions::Get { id } => {
+                        commands::cost::gcp_config_get(&cfg, id).await?;
+                    }
+                    CostCloudConfigActions::Create { file } => {
+                        commands::cost::gcp_config_create(&cfg, &file).await?;
+                    }
+                    CostCloudConfigActions::Delete { id } => {
+                        commands::cost::gcp_config_delete(&cfg, id).await?;
+                    }
+                },
             }
         }
         // --- Misc ---
@@ -6180,6 +8022,40 @@ async fn main_inner() -> anyhow::Result<()> {
                 } => {
                     commands::apm::flow_map(&cfg, query, limit, from, to).await?;
                 }
+                ApmActions::Troubleshooting { action } => match action {
+                    ApmTroubleshootingActions::List {
+                        hostname,
+                        timeframe,
+                    } => {
+                        commands::apm::troubleshooting_list(&cfg, hostname, timeframe).await?;
+                    }
+                },
+            }
+        }
+        // --- DDSQL ---
+        Commands::Ddsql { action } => {
+            cfg.validate_auth()?;
+            match action {
+                DdsqlActions::Table {
+                    query,
+                    from,
+                    to,
+                    interval,
+                    limit,
+                    offset,
+                } => {
+                    commands::ddsql::table(&cfg, &query, &from, &to, interval, Some(limit), offset)
+                        .await?;
+                }
+                DdsqlActions::TimeSeries {
+                    query,
+                    from,
+                    to,
+                    interval,
+                    limit,
+                } => {
+                    commands::ddsql::time_series(&cfg, &query, &from, &to, interval, limit).await?;
+                }
             }
         }
         // --- Investigations ---
@@ -6207,27 +8083,78 @@ async fn main_inner() -> anyhow::Result<()> {
         }
         // --- Network (placeholder) ---
         Commands::Network { action } => match action {
-            NetworkActions::List => commands::network::list()?,
+            NetworkActions::List => {
+                anyhow::bail!("network commands are not yet implemented (API endpoints pending)")
+            }
             NetworkActions::Flows { action } => match action {
                 NetworkFlowActions::List => {
                     cfg.validate_auth()?;
                     commands::network::flows_list(&cfg).await?;
                 }
             },
-            NetworkActions::Devices { action } => match action {
-                NetworkDeviceActions::List => {
-                    cfg.validate_auth()?;
-                    commands::network::devices_list(&cfg).await?;
+            NetworkActions::Devices { action } => {
+                cfg.validate_auth()?;
+                match action {
+                    NetworkDeviceActions::List => {
+                        commands::network::devices_list(&cfg).await?;
+                    }
+                    NetworkDeviceActions::Get { device_id } => {
+                        commands::network::devices_get(&cfg, &device_id).await?;
+                    }
+                    NetworkDeviceActions::Interfaces {
+                        device_id,
+                        ip_addresses,
+                    } => {
+                        commands::network::devices_interfaces(&cfg, &device_id, ip_addresses)
+                            .await?;
+                    }
+                    NetworkDeviceActions::Tags { action } => match action {
+                        NetworkDeviceTagActions::List { device_id } => {
+                            commands::network::devices_tags_list(&cfg, &device_id).await?;
+                        }
+                        NetworkDeviceTagActions::Update { device_id, file } => {
+                            commands::network::devices_tags_update(&cfg, &device_id, &file).await?;
+                        }
+                    },
                 }
-            },
-        },
-        // --- Obs Pipelines (placeholder) ---
-        Commands::ObsPipelines { action } => match action {
-            ObsPipelinesActions::List => commands::obs_pipelines::list()?,
-            ObsPipelinesActions::Get { pipeline_id } => {
-                commands::obs_pipelines::get(&pipeline_id)?;
+            }
+            NetworkActions::Interfaces { action } => {
+                cfg.validate_auth()?;
+                match action {
+                    NetworkInterfaceTagActions::List { interface_id } => {
+                        commands::network::interfaces_tags_list(&cfg, &interface_id).await?;
+                    }
+                    NetworkInterfaceTagActions::Update { interface_id, file } => {
+                        commands::network::interfaces_tags_update(&cfg, &interface_id, &file)
+                            .await?;
+                    }
+                }
             }
         },
+        // --- Obs Pipelines ---
+        Commands::ObsPipelines { action } => {
+            cfg.validate_auth()?;
+            match action {
+                ObsPipelinesActions::List { limit } => {
+                    commands::obs_pipelines::list(&cfg, limit).await?;
+                }
+                ObsPipelinesActions::Get { pipeline_id } => {
+                    commands::obs_pipelines::get(&cfg, &pipeline_id).await?;
+                }
+                ObsPipelinesActions::Create { file } => {
+                    commands::obs_pipelines::create(&cfg, &file).await?;
+                }
+                ObsPipelinesActions::Update { pipeline_id, file } => {
+                    commands::obs_pipelines::update(&cfg, &pipeline_id, &file).await?;
+                }
+                ObsPipelinesActions::Delete { pipeline_id } => {
+                    commands::obs_pipelines::delete(&cfg, &pipeline_id).await?;
+                }
+                ObsPipelinesActions::Validate { file } => {
+                    commands::obs_pipelines::validate(&cfg, &file).await?;
+                }
+            }
+        }
         // --- Scorecards (placeholder) ---
         Commands::Scorecards { action } => match action {
             ScorecardsActions::List => commands::scorecards::list()?,
@@ -6259,6 +8186,16 @@ async fn main_inner() -> anyhow::Result<()> {
                 }
             }
         }
+        // --- ACP ---
+        Commands::Acp { action } => match action {
+            AcpActions::Serve {
+                port,
+                host,
+                agent_id,
+            } => {
+                commands::acp::serve(&cfg, port, &host, agent_id).await?;
+            }
+        },
         // --- Agent ---
         Commands::Agent { action } => match action {
             AgentActions::Schema { compact } => {
@@ -6279,6 +8216,17 @@ async fn main_inner() -> anyhow::Result<()> {
             AliasActions::Delete { names } => commands::alias::delete(names)?,
             AliasActions::Import { file } => commands::alias::import(&file)?,
         },
+        // --- Skills ---
+        Commands::Skills { action } => match action {
+            SkillsActions::List { entry_type } => commands::skills::list(&cfg, entry_type)?,
+            SkillsActions::Install {
+                name,
+                target_agent,
+                dir,
+                entry_type,
+            } => commands::skills::install(&cfg, name, target_agent, dir, entry_type)?,
+            SkillsActions::Path { target_agent } => commands::skills::path(target_agent)?,
+        },
         // --- Product Analytics ---
         Commands::ProductAnalytics { action } => {
             cfg.validate_auth()?;
@@ -6287,6 +8235,14 @@ async fn main_inner() -> anyhow::Result<()> {
                     ProductAnalyticsEventActions::Send { file, .. } => {
                         let f = file.unwrap_or_default();
                         commands::product_analytics::events_send(&cfg, &f).await?;
+                    }
+                },
+                ProductAnalyticsActions::Query { action } => match action {
+                    ProductAnalyticsQueryActions::Scalar { file } => {
+                        commands::product_analytics::query_scalar(&cfg, &file).await?;
+                    }
+                    ProductAnalyticsQueryActions::Timeseries { file } => {
+                        commands::product_analytics::query_timeseries(&cfg, &file).await?;
                     }
                 },
             }
@@ -6331,15 +8287,263 @@ async fn main_inner() -> anyhow::Result<()> {
         }
         // --- Auth ---
         Commands::Auth { action } => match action {
-            AuthActions::Login => commands::auth::login(&cfg).await?,
+            AuthActions::Login {
+                scopes,
+                read_only,
+                site,
+            } => {
+                if let Some(s) = site {
+                    cfg.site = s;
+                }
+                let is_read_only = read_only || cfg.read_only;
+                let resolved =
+                    resolve_login_scopes(scopes.as_deref(), cfg.org.as_deref(), is_read_only);
+                commands::auth::login(&cfg, resolved).await?
+            }
             AuthActions::Logout => commands::auth::logout(&cfg).await?,
-            AuthActions::Status => commands::auth::status(&cfg)?,
+            AuthActions::Status { site } => {
+                if let Some(s) = site {
+                    cfg.site = s;
+                }
+                commands::auth::status(&cfg)?
+            }
+            #[cfg(debug_assertions)]
             AuthActions::Token => commands::auth::token(&cfg)?,
             AuthActions::Refresh => commands::auth::refresh(&cfg).await?,
+            AuthActions::List => commands::auth::list(&cfg)?,
         },
+        // --- Workflows ---
+        Commands::Workflows { action } => {
+            cfg.validate_api_and_app_keys().map_err(|_| {
+                anyhow::anyhow!(
+                    "workflow commands require DD_API_KEY and DD_APP_KEY with workflow_* scopes\n\
+                     OAuth2 bearer tokens are not supported for workflow operations.\n\
+                     See: https://docs.datadoghq.com/api/latest/workflow-automation"
+                )
+            })?;
+            match action {
+                WorkflowActions::Get { workflow_id } => {
+                    commands::workflows::get(&cfg, &workflow_id).await?;
+                }
+                WorkflowActions::Create { file } => {
+                    commands::workflows::create(&cfg, &file).await?;
+                }
+                WorkflowActions::Update { workflow_id, file } => {
+                    commands::workflows::update(&cfg, &workflow_id, &file).await?;
+                }
+                WorkflowActions::Delete { workflow_id } => {
+                    commands::workflows::delete(&cfg, &workflow_id).await?;
+                }
+                WorkflowActions::Run {
+                    workflow_id,
+                    payload,
+                    payload_file,
+                    wait,
+                    timeout,
+                } => {
+                    commands::workflows::run(
+                        &cfg,
+                        &workflow_id,
+                        payload,
+                        payload_file,
+                        wait,
+                        &timeout,
+                    )
+                    .await?;
+                }
+                WorkflowActions::Instances { action } => match action {
+                    WorkflowInstanceActions::List {
+                        workflow_id,
+                        limit,
+                        page,
+                    } => {
+                        commands::workflows::instance_list(&cfg, &workflow_id, limit, page).await?;
+                    }
+                    WorkflowInstanceActions::Get {
+                        workflow_id,
+                        instance_id,
+                    } => {
+                        commands::workflows::instance_get(&cfg, &workflow_id, &instance_id).await?;
+                    }
+                    WorkflowInstanceActions::Cancel {
+                        workflow_id,
+                        instance_id,
+                    } => {
+                        commands::workflows::instance_cancel(&cfg, &workflow_id, &instance_id)
+                            .await?;
+                    }
+                },
+            }
+        }
+        // --- LLM Observability ---
+        Commands::LlmObs { action } => {
+            cfg.validate_auth()?;
+            match action {
+                LlmObsActions::Projects { action } => match action {
+                    LlmObsProjectsActions::Create { file } => {
+                        commands::llm_obs::projects_create(&cfg, &file).await?;
+                    }
+                    LlmObsProjectsActions::List => {
+                        commands::llm_obs::projects_list(&cfg).await?;
+                    }
+                },
+                LlmObsActions::Experiments { action } => match action {
+                    LlmObsExperimentsActions::Create { file } => {
+                        commands::llm_obs::experiments_create(&cfg, &file).await?;
+                    }
+                    LlmObsExperimentsActions::List {
+                        filter_project_id,
+                        filter_dataset_id,
+                    } => {
+                        commands::llm_obs::experiments_list(
+                            &cfg,
+                            filter_project_id,
+                            filter_dataset_id,
+                        )
+                        .await?;
+                    }
+                    LlmObsExperimentsActions::Update {
+                        experiment_id,
+                        file,
+                    } => {
+                        commands::llm_obs::experiments_update(&cfg, &experiment_id, &file).await?;
+                    }
+                    LlmObsExperimentsActions::Delete { file } => {
+                        commands::llm_obs::experiments_delete(&cfg, &file).await?;
+                    }
+                    LlmObsExperimentsActions::Summary { experiment_id } => {
+                        commands::llm_obs::experiments_summary(&cfg, &experiment_id).await?;
+                    }
+                    LlmObsExperimentsActions::Events { action } => match action {
+                        LlmObsExperimentsEventsActions::List {
+                            experiment_id,
+                            limit,
+                            offset,
+                            filter_dimension_key,
+                            filter_dimension_value,
+                            filter_metric_label,
+                            sort_by_metric,
+                            sort_direction,
+                        } => {
+                            commands::llm_obs::experiments_events_list(
+                                &cfg,
+                                &experiment_id,
+                                limit,
+                                offset,
+                                filter_dimension_key,
+                                filter_dimension_value,
+                                filter_metric_label,
+                                sort_by_metric,
+                                &sort_direction,
+                            )
+                            .await?;
+                        }
+                        LlmObsExperimentsEventsActions::Get {
+                            experiment_id,
+                            event_id,
+                        } => {
+                            commands::llm_obs::experiments_events_get(
+                                &cfg,
+                                &experiment_id,
+                                &event_id,
+                            )
+                            .await?;
+                        }
+                    },
+                    LlmObsExperimentsActions::MetricValues {
+                        experiment_id,
+                        metric_label,
+                        segment_by_dimension,
+                        segment_dimension_value,
+                    } => {
+                        commands::llm_obs::experiments_metric_values(
+                            &cfg,
+                            &experiment_id,
+                            &metric_label,
+                            segment_by_dimension,
+                            segment_dimension_value,
+                        )
+                        .await?;
+                    }
+                    LlmObsExperimentsActions::DimensionValues {
+                        experiment_id,
+                        dimension_key,
+                    } => {
+                        commands::llm_obs::experiments_dimension_values(
+                            &cfg,
+                            &experiment_id,
+                            &dimension_key,
+                        )
+                        .await?;
+                    }
+                },
+                LlmObsActions::Datasets { action } => match action {
+                    LlmObsDatasetsActions::Create { project_id, file } => {
+                        commands::llm_obs::datasets_create(&cfg, &project_id, &file).await?;
+                    }
+                    LlmObsDatasetsActions::List { project_id } => {
+                        commands::llm_obs::datasets_list(&cfg, &project_id).await?;
+                    }
+                },
+                LlmObsActions::Spans { action } => match action {
+                    LlmObsSpansActions::Search {
+                        query,
+                        trace_id,
+                        span_id,
+                        span_kind,
+                        span_name,
+                        ml_app,
+                        root_spans_only,
+                        from,
+                        to,
+                        limit,
+                        cursor,
+                    } => {
+                        commands::llm_obs::spans_search(
+                            &cfg,
+                            query,
+                            trace_id,
+                            span_id,
+                            span_kind,
+                            span_name,
+                            ml_app,
+                            root_spans_only,
+                            from,
+                            to,
+                            limit,
+                            cursor,
+                        )
+                        .await?;
+                    }
+                },
+            }
+        }
+        // --- Reference Tables ---
+        Commands::ReferenceTables { action } => {
+            cfg.validate_auth()?;
+            match action {
+                ReferenceTablesActions::List { limit } => {
+                    commands::reference_tables::list(&cfg, limit).await?;
+                }
+                ReferenceTablesActions::Get { table_id } => {
+                    commands::reference_tables::get(&cfg, &table_id).await?;
+                }
+                ReferenceTablesActions::Create { file } => {
+                    commands::reference_tables::create(&cfg, &file).await?;
+                }
+                ReferenceTablesActions::BatchQuery { file } => {
+                    commands::reference_tables::batch_query(&cfg, &file).await?;
+                }
+            }
+        }
         // --- Utility ---
-        Commands::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "pup", &mut std::io::stdout());
+        #[cfg(not(target_arch = "wasm32"))]
+        Commands::Completions { shell, install } => {
+            if install {
+                commands::completions::install(shell)?;
+            } else {
+                commands::completions::generate(shell);
+            }
         }
         Commands::Version => println!("{}", version::build_info()),
         Commands::Test => commands::test::run(&cfg)?,

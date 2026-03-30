@@ -9,7 +9,6 @@ report_sizes: true
 before:
   hooks:
     - rustup default stable
-    - cargo install --locked cargo-zigbuild
     - cargo fetch --locked
     # Verify Cargo.toml version matches git tag
     - >-
@@ -18,16 +17,28 @@ before:
     - rustup target add wasm32-wasip2 wasm32-unknown-unknown
     - cargo build --release --target wasm32-wasip2 --no-default-features --features wasi
     - sh -c 'mkdir -p wasm-out && cp target/wasm32-wasip2/release/pup.wasm wasm-out/pup_wasi.wasm'
-    - cargo install wasm-pack
     - wasm-pack build --target web --no-default-features --features browser
     - sh -c 'tar czf wasm-out/pup_browser_wasm.tar.gz -C pkg .'
 
 builds:
-  - builder: rust
+  # Linux targets: use cargo-zigbuild (zig handles glibc cross-compilation)
+  - id: linux
+    builder: rust
     binary: pup
     targets:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
+    flags:
+      - --release
+      - --features=vendored-openssl
+
+  # macOS targets: use native cargo + Apple clang (avoids aws-lc-sys/cmake
+  # cross-compile failure when zig links x86_64-apple-darwin from arm64)
+  - id: macos
+    builder: rust
+    binary: pup
+    command: build
+    targets:
       - x86_64-apple-darwin
       - aarch64-apple-darwin
     flags:
@@ -130,6 +141,10 @@ release:
 
     # Linux (arm64)
     curl -L https://github.com/datadog-labs/pup/releases/download/{{ .Tag }}/pup_{{ .Version }}_Linux_arm64.tar.gz | tar xz
+
+    # Windows (x86_64)
+    curl -L https://github.com/datadog-labs/pup/releases/download/{{ .Tag }}/pup_{{ .Version }}_Windows_x86_64.zip -o pup.zip
+    tar -xf pup.zip
     ```
 
     ### WASM

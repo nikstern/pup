@@ -1,10 +1,10 @@
 # Pup - Datadog API CLI
 
-Rust-based CLI wrapper for Datadog APIs. Provides OAuth2 + API key authentication for 48 command groups with 283+ subcommands across 37 API domains.
+Rust-based CLI wrapper for Datadog APIs. Provides OAuth2 + API key authentication for 56 command groups with 320+ subcommands across 58 command modules.
 
 ## Documentation Index
 
-- **[COMMANDS.md](docs/COMMANDS.md)** - Complete command reference with all 33 domains
+- **[COMMANDS.md](docs/COMMANDS.md)** - Complete command reference with all 49 domains
 - **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Git workflow, PR process, commit format
 - **[TESTING.md](docs/TESTING.md)** - Test strategy, coverage requirements, CI/CD
 - **[OAUTH2.md](docs/OAUTH2.md)** - OAuth2 implementation details (DCR, PKCE, token storage)
@@ -41,7 +41,7 @@ pup metrics query --query="avg:system.cpu.user{*}" --from="1h"
 pup/
 ├── src/
 │   ├── main.rs            # CLI entry point, clap enums, command routing
-│   ├── commands/           # 47 command modules (monitors.rs, logs.rs, etc.)
+│   ├── commands/           # 58 command modules (monitors.rs, logs.rs, etc.)
 │   ├── auth/              # OAuth2 + DCR + PKCE + token storage
 │   ├── client.rs          # Datadog API client wrapper
 │   ├── config.rs          # Configuration management
@@ -185,7 +185,7 @@ See [TESTING.md](docs/TESTING.md) for details.
 ## Core Dependencies
 
 - **Rust (stable)**
-- **datadog-api-client-rust** v0.27.0 - Official API client
+- **datadog-api-client-rust** v0.28.0 - Official API client
 - **clap** v4 - CLI framework (derive macros)
 - **tokio** - Async runtime
 - **serde** + **serde_json** + **serde_yaml** - Serialization
@@ -194,8 +194,8 @@ See [TESTING.md](docs/TESTING.md) for details.
 
 ## Implementation Status
 
-- **47 command modules** implemented
-- **283 leaf subcommands** across 48 command groups
+- **59 command modules** implemented
+- **325+ subcommands** across 57 command groups
 - **60 unit tests** passing
 - **155/155 API output** matches Go version exactly
 - **390/390 command descriptions** match Go version
