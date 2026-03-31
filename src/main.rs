@@ -5149,8 +5149,8 @@ enum ObsPipelinesActions {
             help = "Maximum number of pipelines to return"
         )]
         limit: i64,
-        #[arg(long, help = "Pagination offset from previous response")]
-        page_offset: Option<i64>,
+        #[arg(long, help = "Page number (0-based) to retrieve")]
+        page_number: Option<i64>,
     },
     /// Get pipeline details
     Get { pipeline_id: String },
@@ -8300,8 +8300,8 @@ async fn main_inner() -> anyhow::Result<()> {
         Commands::ObsPipelines { action } => {
             cfg.validate_auth()?;
             match action {
-                ObsPipelinesActions::List { limit, page_offset } => {
-                    commands::obs_pipelines::list(&cfg, limit, page_offset).await?;
+                ObsPipelinesActions::List { limit, page_number } => {
+                    commands::obs_pipelines::list(&cfg, limit, page_number).await?;
                 }
                 ObsPipelinesActions::Get { pipeline_id } => {
                     commands::obs_pipelines::get(&cfg, &pipeline_id).await?;

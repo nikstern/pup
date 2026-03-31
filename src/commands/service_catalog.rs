@@ -25,6 +25,8 @@ pub async fn list(cfg: &Config, page_size: Option<i64>, page_number: Option<i64>
         .await
         .map_err(|e| anyhow::anyhow!("failed to list services: {e:?}"))?;
     let raw = serde_json::to_value(&resp)?;
+    // Note: the Service Catalog API returns no pagination metadata (no `meta` field),
+    // so agent mode will not emit a `pagination` envelope for this command.
     formatter::output_with_raw(cfg, &resp, &raw)
 }
 

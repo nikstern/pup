@@ -17,18 +17,16 @@ pub struct Metadata {
 }
 
 /// Pagination type for serialization.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaginationType {
     Cursor,
     Offset,
     PageNumber,
-    #[default]
-    None,
 }
 
 /// Pagination metadata for agent mode envelope.
-#[derive(Default, Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PaginationInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
@@ -47,8 +45,13 @@ pub struct PaginationInfo {
     pub pagination_type: PaginationType,
 }
 
-/// Extract pagination info from raw API response JSON.
-/// Returns None if no pagination metadata is found.
+/// Extract pagination metadata from a raw Datadog API response JSON value.
+///
+/// Each branch targets a specific JSON shape used by one or more Datadog API
+/// endpoints. The branches are ordered from most-specific / most-common to
+/// least-specific, and the **first matching branch wins** — callers should be
+/// aware of this ordering when adding new branches so that a more-specific
+/// shape is not shadowed by a more-general one placed earlier in the list.
 pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
     // 1. meta.page.after (most common V2 cursor)
     if let Some(val) = raw.pointer("/meta/page/after") {
@@ -56,9 +59,13 @@ pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
         let has_next = !cursor.is_empty();
         return Some(PaginationInfo {
             cursor: if has_next { Some(cursor) } else { None },
+            next_offset: None,
+            page: None,
+            page_count: None,
+            per_page: None,
+            total_count: None,
             has_next_page: has_next,
             pagination_type: PaginationType::Cursor,
-            ..Default::default()
         });
     }
 
@@ -68,9 +75,13 @@ pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
         let has_next = !cursor.is_empty();
         return Some(PaginationInfo {
             cursor: if has_next { Some(cursor) } else { None },
+            next_offset: None,
+            page: None,
+            page_count: None,
+            per_page: None,
+            total_count: None,
             has_next_page: has_next,
             pagination_type: PaginationType::Cursor,
-            ..Default::default()
         });
     }
 
@@ -80,9 +91,13 @@ pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
         let has_next = !cursor.is_empty();
         return Some(PaginationInfo {
             cursor: if has_next { Some(cursor) } else { None },
+            next_offset: None,
+            page: None,
+            page_count: None,
+            per_page: None,
+            total_count: None,
             has_next_page: has_next,
             pagination_type: PaginationType::Cursor,
-            ..Default::default()
         });
     }
 
@@ -92,9 +107,13 @@ pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
         let has_next = !cursor.is_empty();
         return Some(PaginationInfo {
             cursor: if has_next { Some(cursor) } else { None },
+            next_offset: None,
+            page: None,
+            page_count: None,
+            per_page: None,
+            total_count: None,
             has_next_page: has_next,
             pagination_type: PaginationType::Cursor,
-            ..Default::default()
         });
     }
 
@@ -105,34 +124,32 @@ pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
     {
         let has_next = offset > 0;
         return Some(PaginationInfo {
+            cursor: None,
             next_offset: if has_next { Some(offset) } else { None },
+            page: None,
+            page_count: None,
+            per_page: None,
+            total_count: None,
             has_next_page: has_next,
             pagination_type: PaginationType::Offset,
-            ..Default::default()
         });
     }
 
-    // 6. meta.page.next_offset (reference-tables)
+    // 7. meta.page.next_offset (reference-tables)
     if let Some(offset) = raw
         .pointer("/meta/page/next_offset")
         .and_then(|v| v.as_i64())
     {
         let has_next = offset > 0;
         return Some(PaginationInfo {
+            cursor: None,
             next_offset: if has_next { Some(offset) } else { None },
+            page: None,
+            page_count: None,
+            per_page: None,
+            total_count: None,
             has_next_page: has_next,
             pagination_type: PaginationType::Offset,
-            ..Default::default()
-        });
-    }
-
-    // 7. meta.count (obs-pipelines — total only, no next_offset)
-    if let Some(count) = raw.pointer("/meta/count").and_then(|v| v.as_i64()) {
-        return Some(PaginationInfo {
-            total_count: Some(count),
-            has_next_page: false, // caller must set based on request offset+limit vs count
-            pagination_type: PaginationType::Offset,
-            ..Default::default()
         });
     }
 
@@ -146,13 +163,14 @@ pub fn extract_pagination(raw: &serde_json::Value) -> Option<PaginationInfo> {
             .pointer("/metadata/total_count")
             .and_then(|v| v.as_i64());
         return Some(PaginationInfo {
+            cursor: None,
+            next_offset: None,
             page: Some(page),
             page_count: Some(page_count),
             per_page,
             total_count: total,
             has_next_page: page + 1 < page_count,
             pagination_type: PaginationType::PageNumber,
-            ..Default::default()
         });
     }
 
@@ -196,6 +214,32 @@ fn go_html_escape(json: &str) -> String {
         .replace('>', "\\u003e")
 }
 
+/// Build and print the agent-mode JSON envelope.
+/// Centralises all envelope logic so both `format_and_print` and
+/// `output_with_pagination` stay in sync automatically.
+fn print_agent_envelope<T: Serialize>(
+    data: &T,
+    meta: Option<&Metadata>,
+    pagination: Option<PaginationInfo>,
+) -> Result<()> {
+    let sorted_data = sort_json_value(serde_json::to_value(data)?);
+    // Hoist: when the API wraps its list/object in a nested "data" key,
+    // use that inner value directly so agents see .data[*] instead of .data.data[*].
+    let effective_data = match &sorted_data {
+        serde_json::Value::Object(obj) if obj.contains_key("data") => obj["data"].clone(),
+        _ => sorted_data.clone(),
+    };
+    let envelope = AgentEnvelope {
+        status: "success",
+        data: &effective_data,
+        metadata: meta,
+        pagination,
+    };
+    let json = go_html_escape(&serde_json::to_string_pretty(&envelope)?);
+    println!("{json}");
+    Ok(())
+}
+
 /// Format and print data to stdout.
 pub fn format_and_print<T: Serialize>(
     data: &T,
@@ -205,23 +249,8 @@ pub fn format_and_print<T: Serialize>(
     raw_response: Option<&serde_json::Value>,
 ) -> Result<()> {
     if agent_mode && *format == OutputFormat::Json {
-        let sorted_data = sort_json_value(serde_json::to_value(data)?);
-        // Hoist: when the API wraps its list/object in a nested "data" key,
-        // use that inner value directly so agents see .data[*] instead of .data.data[*].
-        let effective_data = match &sorted_data {
-            serde_json::Value::Object(obj) if obj.contains_key("data") => obj["data"].clone(),
-            _ => sorted_data.clone(),
-        };
         let pagination = raw_response.and_then(extract_pagination);
-        let envelope = AgentEnvelope {
-            status: "success",
-            data: &effective_data,
-            metadata: meta,
-            pagination,
-        };
-        let json = go_html_escape(&serde_json::to_string_pretty(&envelope)?);
-        println!("{json}");
-        return Ok(());
+        return print_agent_envelope(data, meta, pagination);
     }
 
     match format {
@@ -245,6 +274,20 @@ pub fn output_with_raw<T: Serialize>(
     raw: &serde_json::Value,
 ) -> Result<()> {
     format_and_print(data, &cfg.output_format, cfg.agent_mode, None, Some(raw))
+}
+
+/// Convenience: format and print with an explicitly computed pagination object.
+/// Use this when pagination cannot be derived from the raw JSON alone (e.g. obs-pipelines,
+/// where the next-page calculation requires knowledge of the request parameters).
+pub fn output_with_pagination<T: Serialize>(
+    cfg: &crate::config::Config,
+    data: &T,
+    pagination: Option<PaginationInfo>,
+) -> Result<()> {
+    if cfg.agent_mode && cfg.output_format == OutputFormat::Json {
+        return print_agent_envelope(data, None, pagination);
+    }
+    format_and_print(data, &cfg.output_format, cfg.agent_mode, None, None)
 }
 
 pub fn print_json<T: Serialize>(data: &T) -> Result<()> {
@@ -1352,15 +1395,14 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_pagination_meta_count() {
+    fn test_extract_pagination_meta_count_ignored() {
+        // meta.count alone should NOT produce a pagination object — it is not a
+        // reliable pagination signal (many non-paginated endpoints include this field).
         let raw = serde_json::json!({
             "data": [{"id": "1"}],
             "meta": {"count": 42}
         });
-        let info = extract_pagination(&raw).unwrap();
-        assert_eq!(info.pagination_type, PaginationType::Offset);
-        assert_eq!(info.total_count, Some(42));
-        assert!(!info.has_next_page); // caller must determine
+        assert!(extract_pagination(&raw).is_none());
     }
 
     #[test]

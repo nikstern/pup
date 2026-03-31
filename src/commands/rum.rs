@@ -358,8 +358,6 @@ pub async fn sessions_list(
     formatter::output_with_raw(cfg, &resp, &raw)
 }
 
-
-
 // ---- RUM Playlists ----
 
 pub async fn playlists_list(cfg: &Config) -> Result<()> {

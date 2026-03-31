@@ -69,7 +69,7 @@ When running in agent mode (`--agent`), pup wraps API responses in an envelope t
 The pagination object may include:
 
 | Field | Description |
-|---|---|
+|---------|-------------|
 | `cursor` | Opaque cursor string for the next page (cursor-based) |
 | `next_offset` | Numeric offset for the next page (offset-based) |
 | `page` | Current page number (page-number-based) |
@@ -86,7 +86,7 @@ Only relevant fields are included. For example, cursor-based responses include `
 ### Cursor-Based Commands (`--cursor`)
 
 | Command | Notes |
-|---|---|
+|---------|-------|
 | `audit-logs list` | |
 | `audit-logs search` | |
 | `cicd events search` | |
@@ -110,23 +110,23 @@ Only relevant fields are included. For example, cursor-based responses include `
 ### Offset-Based Commands (`--page-offset`)
 
 | Command | Notes |
-|---|---|
+|---------|-------|
 | `incidents list` | |
-| `obs-pipelines list` | Uses `--limit` for page size |
 | `reference-tables list` | |
 
 ### Page-Number Commands (`--page-size`, `--page-number`)
 
 | Command | Notes |
-|---|---|
-| `service-catalog list` | Both args optional |
+|---------|-------|
+| `obs-pipelines list` | Uses `--limit` for page size, `--page-number` for 0-based page index |
+| `service-catalog list` | Both args optional; the API returns no pagination metadata, so agent mode does not emit a `pagination` envelope |
 
 ### Commands with Pre-Existing Pagination
 
 These commands already had pagination flags before the unified pagination work. Their existing flags are unchanged.
 
 | Command | Flags |
-|---|---|
+|---------|-------|
 | `app-keys list` | `--page-size`, `--page-number` |
 | `cases search` | `--page-size`, `--page-number` |
 | `cicd flaky-tests search` | `--cursor`, `--limit` |
@@ -178,7 +178,7 @@ pup incidents list --limit 20 --page-offset 40
 
 ```bash
 # Agent mode wraps response with pagination metadata
-pup --agent logs search --query="*" --from=1h --limit 5 --output json
+pup --agent logs search --query="*" --from=1h --limit 5
 
 # Response includes:
 # "pagination": { "cursor": "...", "has_next_page": true, "type": "cursor" }

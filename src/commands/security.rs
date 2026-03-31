@@ -140,8 +140,6 @@ pub async fn findings_search(
     formatter::output_with_raw(cfg, &resp, &raw)
 }
 
-
-
 // ---- Bulk Export ----
 
 pub async fn rules_bulk_export(cfg: &Config, rule_ids: Vec<String>) -> Result<()> {

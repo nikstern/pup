@@ -270,8 +270,6 @@ pub async fn search(
     Ok(())
 }
 
-
-
 /// Alias for `search` with the same interface.
 #[allow(clippy::too_many_arguments)]
 pub async fn list(
