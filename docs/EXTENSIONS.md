@@ -192,7 +192,7 @@ Pup propagates the extension's exit code. If the extension exits with code 1, pu
 
 ## Read-Only Mode
 
-When pup runs in read-only mode (`--read-only`), the built-in `pup extension install` and `pup extension remove` commands are blocked. Extension dispatch itself is not blocked - instead, `PUP_READ_ONLY=true` is forwarded and the extension is responsible for honoring it.
+When pup runs in read-only mode (`--read-only`), the built-in `pup extension install`, `pup extension remove`, and `pup extension upgrade` commands are blocked. Extension dispatch itself is not blocked - instead, `PUP_READ_ONLY=true` is forwarded and the extension is responsible for honoring it.
 
 ## Migrating a Feature to an Extension
 
@@ -208,4 +208,5 @@ To extract an existing pup feature into an extension:
 
 - **GitHub-based installation** (`pup extension install owner/repo`) is not yet implemented. Use `--local` for now.
 - **Extension upgrade** (`pup extension upgrade`) is not yet implemented.
+- **Source must be a regular file**: `pup extension install --local` requires the source path to be a regular file, not a directory.
 - **Agent-mode help**: `pup --agent <ext-name> --help` prints pup's top-level schema, not the extension's help. In normal mode, `--help` is passed through to the extension.

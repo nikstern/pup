@@ -6135,6 +6135,7 @@ pub(crate) fn is_write_command_name(name: &str) -> bool {
         || name == "set"
         || name == "add"
         || name == "remove"
+        || name == "install"
         || name == "assign"
         || name == "archive"
         || name == "unarchive"

@@ -49,6 +49,22 @@ pub fn install_from_local(
     if !source.exists() {
         bail!("source file does not exist: {}", source.display());
     }
+    if !source.is_file() {
+        bail!(
+            "source must be a regular file, not a directory: {}",
+            source.display()
+        );
+    }
+
+    // Canonicalize the source path so that symlinks resolve correctly.
+    // Without this, a relative path like ./pup-hello would be resolved
+    // relative to the symlink's parent directory, not the user's CWD.
+    let source = std::fs::canonicalize(source).with_context(|| {
+        format!(
+            "resolving absolute path for source: {}",
+            source.display()
+        )
+    })?;
 
     let ext_base =
         extension_dir().context("could not determine config directory for extensions")?;
@@ -78,7 +94,7 @@ pub fn install_from_local(
 
     if link {
         #[cfg(unix)]
-        std::os::unix::fs::symlink(source, &dest).with_context(|| {
+        std::os::unix::fs::symlink(&source, &dest).with_context(|| {
             format!(
                 "creating symlink {} -> {}",
                 dest.display(),
@@ -86,7 +102,7 @@ pub fn install_from_local(
             )
         })?;
         #[cfg(windows)]
-        std::os::windows::fs::symlink_file(source, &dest).with_context(|| {
+        std::os::windows::fs::symlink_file(&source, &dest).with_context(|| {
             format!(
                 "creating symlink {} -> {}",
                 dest.display(),
@@ -94,7 +110,7 @@ pub fn install_from_local(
             )
         })?;
     } else {
-        std::fs::copy(source, &dest)
+        std::fs::copy(&source, &dest)
             .with_context(|| format!("copying {} -> {}", source.display(), dest.display()))?;
 
         // Set executable permission on Unix.
@@ -129,6 +145,8 @@ pub fn install_from_local(
 
 /// Remove an installed extension by name.
 pub fn remove_extension(name: &str) -> Result<()> {
+    validate_extension_name(name)?;
+
     let ext_base =
         extension_dir().context("could not determine config directory for extensions")?;
     let ext_dir = ext_base.join(format!("pup-{name}"));
@@ -141,15 +159,9 @@ pub fn remove_extension(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Return the current time as an ISO 8601 string (UTC).
+/// Return the current time as an ISO 8601 / RFC 3339 string (UTC).
 fn chrono_now_iso() -> String {
-    // Use a simple approach without pulling in chrono.
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    // Format as a simple timestamp - not perfect ISO 8601 but functional.
-    format!("{}s-since-epoch", now.as_secs())
+    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]
@@ -191,6 +203,34 @@ mod tests {
         assert!(validate_extension_name("extension").is_err());
         assert!(validate_extension_name("help").is_err());
         assert!(validate_extension_name("version").is_err());
+    }
+
+    #[test]
+    fn test_validate_name_path_traversal() {
+        // Names containing path separators or traversal sequences must be rejected
+        assert!(validate_extension_name("../etc").is_err());
+        assert!(validate_extension_name("foo/bar").is_err());
+        assert!(validate_extension_name("..").is_err());
+    }
+
+    #[test]
+    fn test_chrono_now_iso_format() {
+        let ts = chrono_now_iso();
+        // Must parse as a valid RFC 3339 / ISO 8601 timestamp
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&ts).is_ok(),
+            "chrono_now_iso() produced invalid RFC 3339: {}",
+            ts
+        );
+    }
+
+    #[test]
+    fn test_remove_rejects_path_traversal() {
+        // remove_extension must reject names with path traversal characters
+        // before attempting any filesystem operations.
+        assert!(remove_extension("../important-data").is_err());
+        assert!(remove_extension("foo/bar").is_err());
+        assert!(remove_extension("..").is_err());
     }
 
     #[test]
