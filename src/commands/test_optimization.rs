@@ -57,10 +57,7 @@ pub async fn settings_delete(cfg: &Config, file: &str) -> Result<()> {
 
 // ---- Flaky Tests ----
 
-pub async fn flaky_tests_search(
-    cfg: &Config,
-    file: Option<String>,
-) -> Result<()> {
+pub async fn flaky_tests_search(cfg: &Config, file: Option<String>) -> Result<()> {
     let dd_cfg = client::make_dd_config(cfg);
     let api = match client::make_bearer_client(cfg) {
         Some(c) => TestOptimizationAPI::with_client_and_config(dd_cfg, c),

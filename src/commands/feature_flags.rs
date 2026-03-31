@@ -198,11 +198,7 @@ pub async fn envs_delete(cfg: &Config, feature_flags_env_id: &str) -> Result<()>
 // Enable / Disable flag in environment
 // ---------------------------------------------------------------------------
 
-pub async fn enable(
-    cfg: &Config,
-    feature_flag_id: &str,
-    feature_flags_env_id: &str,
-) -> Result<()> {
+pub async fn enable(cfg: &Config, feature_flag_id: &str, feature_flags_env_id: &str) -> Result<()> {
     let api = make_api(cfg);
     let flag_id = feature_flag_id
         .parse::<uuid::Uuid>()
@@ -213,9 +209,7 @@ pub async fn enable(
     api.enable_feature_flag_environment(flag_id, env_id)
         .await
         .map_err(|e| anyhow::anyhow!("failed to enable feature flag in environment: {e:?}"))?;
-    eprintln!(
-        "Feature flag {feature_flag_id} enabled in environment {feature_flags_env_id}."
-    );
+    eprintln!("Feature flag {feature_flag_id} enabled in environment {feature_flags_env_id}.");
     Ok(())
 }
 
@@ -234,8 +228,6 @@ pub async fn disable(
     api.disable_feature_flag_environment(flag_id, env_id)
         .await
         .map_err(|e| anyhow::anyhow!("failed to disable feature flag in environment: {e:?}"))?;
-    eprintln!(
-        "Feature flag {feature_flag_id} disabled in environment {feature_flags_env_id}."
-    );
+    eprintln!("Feature flag {feature_flag_id} disabled in environment {feature_flags_env_id}.");
     Ok(())
 }

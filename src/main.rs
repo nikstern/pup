@@ -3082,9 +3082,15 @@ enum WidgetActions {
         filter_is_favorited: Option<bool>,
         #[arg(long, help = "Filter by title (substring match)")]
         filter_title: Option<String>,
-        #[arg(long, help = "Filter by tags (bracket-delimited CSV, e.g. [tag1,tag2])")]
+        #[arg(
+            long,
+            help = "Filter by tags (bracket-delimited CSV, e.g. [tag1,tag2])"
+        )]
         filter_tags: Option<String>,
-        #[arg(long, help = "Sort field (title, created_at, modified_at; prefix with - for descending)")]
+        #[arg(
+            long,
+            help = "Sort field (title, created_at, modified_at; prefix with - for descending)"
+        )]
         sort: Option<String>,
         #[arg(long, help = "Page number (0-indexed)")]
         page_number: Option<i32>,
@@ -7418,7 +7424,8 @@ async fn main_inner() -> anyhow::Result<()> {
                         widget_id,
                         file,
                     } => {
-                        commands::widgets::update(&cfg, &experience_type, &widget_id, &file).await?;
+                        commands::widgets::update(&cfg, &experience_type, &widget_id, &file)
+                            .await?;
                     }
                     WidgetActions::Delete {
                         experience_type,
@@ -8598,7 +8605,9 @@ async fn main_inner() -> anyhow::Result<()> {
                     } => {
                         commands::feature_flags::envs_list(&cfg, name, key, limit, offset).await?;
                     }
-                    FeatureFlagEnvActions::Get { feature_flags_env_id } => {
+                    FeatureFlagEnvActions::Get {
+                        feature_flags_env_id,
+                    } => {
                         commands::feature_flags::envs_get(&cfg, &feature_flags_env_id).await?;
                     }
                     FeatureFlagEnvActions::Create { file } => {
@@ -8611,7 +8620,9 @@ async fn main_inner() -> anyhow::Result<()> {
                         commands::feature_flags::envs_update(&cfg, &feature_flags_env_id, &file)
                             .await?;
                     }
-                    FeatureFlagEnvActions::Delete { feature_flags_env_id } => {
+                    FeatureFlagEnvActions::Delete {
+                        feature_flags_env_id,
+                    } => {
                         commands::feature_flags::envs_delete(&cfg, &feature_flags_env_id).await?;
                     }
                 },
@@ -8626,12 +8637,8 @@ async fn main_inner() -> anyhow::Result<()> {
                     feature_flag_id,
                     feature_flags_env_id,
                 } => {
-                    commands::feature_flags::disable(
-                        &cfg,
-                        &feature_flag_id,
-                        &feature_flags_env_id,
-                    )
-                    .await?;
+                    commands::feature_flags::disable(&cfg, &feature_flag_id, &feature_flags_env_id)
+                        .await?;
                 }
             }
         }

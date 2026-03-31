@@ -27,6 +27,7 @@ fn make_api(cfg: &Config) -> WidgetsAPI {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list(
     cfg: &Config,
     experience_type: &str,
@@ -44,17 +45,11 @@ pub async fn list(
 
     let mut params = SearchWidgetsOptionalParams::default();
     if let Some(wt) = filter_widget_type {
+        use datadog_api_client::datadog::UnparsedObject;
         use datadog_api_client::datadogV2::model::WidgetType;
-        // Pass through as an unparsed object if not a known type
-        let widget_type = match wt.as_str() {
-            s => {
-                use datadog_api_client::datadog::UnparsedObject;
-                let _ = s;
-                WidgetType::UnparsedObject(UnparsedObject {
-                    value: serde_json::Value::String(wt.clone()),
-                })
-            }
-        };
+        let widget_type = WidgetType::UnparsedObject(UnparsedObject {
+            value: serde_json::Value::String(wt),
+        });
         params = params.filter_widget_type(widget_type);
     }
     if let Some(handle) = filter_creator_handle {
@@ -111,7 +106,12 @@ pub async fn create(cfg: &Config, experience_type: &str, file: &str) -> Result<(
     formatter::output(cfg, &resp)
 }
 
-pub async fn update(cfg: &Config, experience_type: &str, widget_id: &str, file: &str) -> Result<()> {
+pub async fn update(
+    cfg: &Config,
+    experience_type: &str,
+    widget_id: &str,
+    file: &str,
+) -> Result<()> {
     let exp_type = parse_experience_type(experience_type)?;
     let uuid: uuid::Uuid = widget_id
         .parse()
