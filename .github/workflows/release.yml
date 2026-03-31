@@ -10,8 +10,12 @@ permissions:
   id-token: write  # Required for cosign keyless signing
 
 jobs:
-  goreleaser:
-    runs-on: macos-latest
+  # ---------------------------------------------------------------------------
+  # Linux builds — parallel with macOS and WASM
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest-16-cores
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -22,15 +26,15 @@ jobs:
         id: cache-zig
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
-          path: ${{ github.workspace }}/zig-macos-aarch64-0.13.0
-          key: zig-0.13.0-macos-aarch64
+          path: ${{ github.workspace }}/zig-linux-x86_64-0.13.0
+          key: zig-0.13.0-linux-x86_64
       - name: Download Zig
         if: steps.cache-zig.outputs.cache-hit != 'true'
         run: |
           ZIG_VERSION="0.13.0"
-          curl -sL "https://ziglang.org/download/${ZIG_VERSION}/zig-macos-aarch64-${ZIG_VERSION}.tar.xz" | tar xJ
+          curl -sL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar xJ
       - name: Add Zig to PATH
-        run: echo "${{ github.workspace }}/zig-macos-aarch64-0.13.0" >> "$GITHUB_PATH"
+        run: echo "${{ github.workspace }}/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal
@@ -43,26 +47,124 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-release-
       - name: Install build tools
-        run: brew install cargo-zigbuild wasm-pack
-      - name: Install cosign
-        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+        run: cargo install cargo-zigbuild
       - name: Install syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --parallelism 4
+          args: release --clean --config .goreleaser-linux.yaml --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-linux
+          path: |
+            dist/*.tar.gz
+            dist/*.sbom.json
+          retention-days: 1
 
-  windows:
-    name: Windows Build
-    needs: goreleaser
+  # ---------------------------------------------------------------------------
+  # macOS builds — parallel with Linux and WASM
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest-xlarge
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Fetch all tags
+        run: git fetch --force --tags
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-apple-darwin
+      - name: Cache Rust dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --config .goreleaser-macos.yaml --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-macos
+          path: |
+            dist/*.tar.gz
+            dist/*.sbom.json
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # WASM builds — parallel with Linux and macOS
+  # ---------------------------------------------------------------------------
+  build-wasm:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-wasip2 wasm32-unknown-unknown
+      - name: Cache Rust dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASI
+        run: |
+          cargo build --release --target wasm32-wasip2 --no-default-features --features wasi
+          mkdir -p wasm-out
+          cp target/wasm32-wasip2/release/pup.wasm wasm-out/pup_wasi.wasm
+      - name: Build browser WASM
+        run: |
+          wasm-pack build --target web --no-default-features --features browser
+          tar czf wasm-out/pup_browser_wasm.tar.gz -C pkg .
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-wasm
+          path: wasm-out/
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Windows build — parallel with everything else
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows
     runs-on: windows-latest
     defaults:
       run:
@@ -89,9 +191,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-release-
       - name: Build
         run: cargo build --release
       - name: Get version from tag
@@ -106,24 +208,127 @@ jobs:
           cp README.md staging/
           cd staging
           7z a "../pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip" .
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-windows
+          path: "pup_*_Windows_x86_64.zip"
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Finalize — collect all artifacts, checksum, sign, publish release
+  # ---------------------------------------------------------------------------
+  finalize:
+    name: Publish Release
+    needs: [build-linux, build-macos, build-wasm, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: collected/
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          echo "=== Downloaded artifacts ==="
+          find collected/ -type f | sort
+
+          # Goreleaser archives and SBOMs (upload-artifact preserves relative paths under dist/)
+          find collected/dist-linux collected/dist-macos -type f \( -name '*.tar.gz' -o -name '*.sbom.json' \) \
+            -exec cp {} release-assets/ \;
+
+          # WASM
+          cp collected/dist-wasm/pup_wasi.wasm release-assets/
+          cp collected/dist-wasm/pup_browser_wasm.tar.gz release-assets/
+
+          # Windows
+          cp collected/dist-windows/*.zip release-assets/
+
+          echo "=== Release assets ==="
+          ls -la release-assets/
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: |
+          CHECKSUMS="pup_${{ steps.version.outputs.version }}_checksums.txt"
+          sha256sum * > "$CHECKSUMS"
+          echo "=== Checksums ==="
+          cat "$CHECKSUMS"
+
       - name: Install cosign
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
-      - name: Upload to release
-        run: gh release upload "$GITHUB_REF_NAME" "pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Add to checksums and re-sign
+
+      - name: Sign checksums
+        working-directory: release-assets
         run: |
-          ZIP="pup_${{ steps.version.outputs.version }}_Windows_x86_64.zip"
           CHECKSUMS="pup_${{ steps.version.outputs.version }}_checksums.txt"
-          SHA=$(sha256sum "$ZIP" | awk '{print $1}')
-          gh release download "$GITHUB_REF_NAME" --pattern "$CHECKSUMS" --output "$CHECKSUMS"
-          echo "$SHA  $ZIP" >> "$CHECKSUMS"
-          gh release upload "$GITHUB_REF_NAME" "$CHECKSUMS" --clobber
           cosign sign-blob \
             --bundle="${CHECKSUMS}.sigstore.json" \
             "$CHECKSUMS" \
             --yes
-          gh release upload "$GITHUB_REF_NAME" "${CHECKSUMS}.sigstore.json" --clobber
+
+      - name: Create GitHub release
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${GITHUB_REF_NAME}"
+
+          cat > release-notes.md <<EOF
+          ## Pup ${VERSION}
+
+          ### Installation
+
+          \`\`\`bash
+          # macOS (Apple Silicon)
+          curl -L https://github.com/datadog-labs/pup/releases/download/${TAG}/pup_${VERSION}_Darwin_arm64.tar.gz | tar xz
+
+          # macOS (Intel)
+          curl -L https://github.com/datadog-labs/pup/releases/download/${TAG}/pup_${VERSION}_Darwin_x86_64.tar.gz | tar xz
+
+          # Linux (x86_64)
+          curl -L https://github.com/datadog-labs/pup/releases/download/${TAG}/pup_${VERSION}_Linux_x86_64.tar.gz | tar xz
+
+          # Linux (arm64)
+          curl -L https://github.com/datadog-labs/pup/releases/download/${TAG}/pup_${VERSION}_Linux_arm64.tar.gz | tar xz
+
+          # Windows (x86_64)
+          curl -L https://github.com/datadog-labs/pup/releases/download/${TAG}/pup_${VERSION}_Windows_x86_64.zip -o pup.zip
+          tar -xf pup.zip
+          \`\`\`
+
+          ### WASM
+
+          - **WASI** (\`pup_wasi.wasm\`): Run in Wasmtime or any WASI Preview 2 runtime
+          - **Browser WASM** (\`pup_browser_wasm.tar.gz\`): npm-ready package with \`PupClient\` JS class and TypeScript definitions
+
+          ### Verifying
+
+          \`\`\`bash
+          # Verify checksums
+          sha256sum -c pup_${VERSION}_checksums.txt
+
+          # Verify signature (requires cosign)
+          cosign verify-blob \\
+            --bundle pup_${VERSION}_checksums.txt.sigstore.json \\
+            pup_${VERSION}_checksums.txt
+          \`\`\`
+          EOF
+
+          # Strip leading whitespace from heredoc (indented in YAML)
+          sed -i 's/^          //' release-notes.md
+
+          gh release create "$TAG" \
+            --title "Release $VERSION" \
+            --notes-file release-notes.md \
+            --generate-notes \
+            release-assets/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# macOS-only goreleaser config — runs on macos-latest-xlarge in the parallel release pipeline.
+
+version: 2
+
+project_name: pup
+report_sizes: true
+
+before:
+  hooks:
+    - rustup default stable
+    - cargo fetch --locked
+    # Verify Cargo.toml version matches git tag
+    - >-
+      sh -c 'CARGO_VER=$(grep "^version" Cargo.toml | head -1 | sed "s/.*\"\(.*\)\"/\1/"); TAG_VER=$(git describe --tags --exact-match 2>/dev/null | sed "s/^v//"); if [ "$CARGO_VER" != "$TAG_VER" ]; then echo "ERROR: Cargo.toml version ($CARGO_VER) does not match git tag ($TAG_VER)"; exit 1; fi'
+
+builds:
+  - id: macos
+    builder: rust
+    binary: pup
+    command: build
+    targets:
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+    flags:
+      - --release
+      - --features=vendored-openssl
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - LICENSE-3rdparty.csv
+      - README.md
+
+sboms:
+  - artifacts: archive
+    cmd: syft
+    args:
+      - "${artifact}"
+      - "--output"
+      - "spdx-json=${document}"
+    documents:
+      - "{{ .ArtifactName }}.sbom.json"
+
+# Disable release — the finalize job handles it
+release:
+  disable: true
+
+# Disable checksum/signing — finalize handles these across all platforms
+checksum:
+  disable: true
