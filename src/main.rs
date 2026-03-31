@@ -2172,45 +2172,6 @@ enum Commands {
     },
     /// Print version information
     Version,
-    /// Manage Datadog saved widgets
-    ///
-    /// Create, read, update, and delete saved widgets. Widgets are reusable
-    /// visualization components stored independently from any dashboard or notebook,
-    /// partitioned by experience type and identified by a UUID.
-    ///
-    /// EXPERIENCE TYPES:
-    ///   ccm_reports, logs_reports, csv_reports, product_analytics
-    ///
-    /// CAPABILITIES:
-    ///   • List/search widgets with filtering and pagination
-    ///   • Get widget details by UUID
-    ///   • Create a widget from a JSON file
-    ///   • Update a widget from a JSON file
-    ///   • Delete a widget by UUID
-    ///
-    /// EXAMPLES:
-    ///   # List widgets for an experience type
-    ///   pup widgets list logs_reports
-    ///
-    ///   # Get a widget
-    ///   pup widgets get logs_reports <widget-uuid>
-    ///
-    ///   # Create a widget
-    ///   pup widgets create logs_reports --file widget.json
-    ///
-    ///   # Update a widget
-    ///   pup widgets update logs_reports <widget-uuid> --file widget.json
-    ///
-    ///   # Delete a widget
-    ///   pup widgets delete logs_reports <widget-uuid>
-    ///
-    /// AUTHENTICATION:
-    ///   Requires either OAuth2 authentication or API keys.
-    #[command(verbatim_doc_comment)]
-    Widgets {
-        #[command(subcommand)]
-        action: WidgetActions,
-    },
     /// Manage Datadog workflows
     ///
     /// Create, update, delete, and execute Datadog Workflow Automation workflows.
@@ -2613,6 +2574,11 @@ enum DashboardActions {
     },
     /// Delete a dashboard
     Delete { id: String },
+    /// Manage saved widgets
+    Widgets {
+        #[command(subcommand)]
+        action: WidgetActions,
+    },
 }
 
 // ---- Metrics ----
@@ -7409,6 +7375,58 @@ async fn main_inner() -> anyhow::Result<()> {
                     commands::dashboards::update(&cfg, &id, &file).await?;
                 }
                 DashboardActions::Delete { id } => commands::dashboards::delete(&cfg, &id).await?,
+                DashboardActions::Widgets { action } => match action {
+                    WidgetActions::List {
+                        experience_type,
+                        filter_widget_type,
+                        filter_creator_handle,
+                        filter_is_favorited,
+                        filter_title,
+                        filter_tags,
+                        sort,
+                        page_number,
+                        page_size,
+                    } => {
+                        commands::widgets::list(
+                            &cfg,
+                            &experience_type,
+                            filter_widget_type,
+                            filter_creator_handle,
+                            filter_is_favorited,
+                            filter_title,
+                            filter_tags,
+                            sort,
+                            page_number,
+                            page_size,
+                        )
+                        .await?;
+                    }
+                    WidgetActions::Get {
+                        experience_type,
+                        widget_id,
+                    } => {
+                        commands::widgets::get(&cfg, &experience_type, &widget_id).await?;
+                    }
+                    WidgetActions::Create {
+                        experience_type,
+                        file,
+                    } => {
+                        commands::widgets::create(&cfg, &experience_type, &file).await?;
+                    }
+                    WidgetActions::Update {
+                        experience_type,
+                        widget_id,
+                        file,
+                    } => {
+                        commands::widgets::update(&cfg, &experience_type, &widget_id, &file).await?;
+                    }
+                    WidgetActions::Delete {
+                        experience_type,
+                        widget_id,
+                    } => {
+                        commands::widgets::delete(&cfg, &experience_type, &widget_id).await?;
+                    }
+                },
             }
         }
         // --- Metrics ---
@@ -9617,62 +9635,6 @@ async fn main_inner() -> anyhow::Result<()> {
                 commands::extension::upgrade(&cfg, name, all)?;
             }
         },
-        // --- Widgets ---
-        Commands::Widgets { action } => {
-            cfg.validate_auth()?;
-            match action {
-                WidgetActions::List {
-                    experience_type,
-                    filter_widget_type,
-                    filter_creator_handle,
-                    filter_is_favorited,
-                    filter_title,
-                    filter_tags,
-                    sort,
-                    page_number,
-                    page_size,
-                } => {
-                    commands::widgets::list(
-                        &cfg,
-                        &experience_type,
-                        filter_widget_type,
-                        filter_creator_handle,
-                        filter_is_favorited,
-                        filter_title,
-                        filter_tags,
-                        sort,
-                        page_number,
-                        page_size,
-                    )
-                    .await?;
-                }
-                WidgetActions::Get {
-                    experience_type,
-                    widget_id,
-                } => {
-                    commands::widgets::get(&cfg, &experience_type, &widget_id).await?;
-                }
-                WidgetActions::Create {
-                    experience_type,
-                    file,
-                } => {
-                    commands::widgets::create(&cfg, &experience_type, &file).await?;
-                }
-                WidgetActions::Update {
-                    experience_type,
-                    widget_id,
-                    file,
-                } => {
-                    commands::widgets::update(&cfg, &experience_type, &widget_id, &file).await?;
-                }
-                WidgetActions::Delete {
-                    experience_type,
-                    widget_id,
-                } => {
-                    commands::widgets::delete(&cfg, &experience_type, &widget_id).await?;
-                }
-            }
-        }
         // --- Utility ---
         #[cfg(not(target_arch = "wasm32"))]
         Commands::Completions { shell, install } => {
