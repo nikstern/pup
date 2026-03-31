@@ -1,0 +1,168 @@
+use anyhow::{bail, Result};
+use std::path::PathBuf;
+
+use crate::config::Config;
+use crate::extensions;
+
+/// List all installed extensions.
+pub fn list(cfg: &Config) -> Result<()> {
+    let exts = extensions::discovery::list_extensions()?;
+    if exts.is_empty() {
+        match cfg.output_format {
+            crate::config::OutputFormat::Table => {
+                println!("No extensions installed.");
+                println!();
+                println!("Install one with: pup extension install <source>");
+            }
+            _ => {
+                crate::formatter::format_and_print(
+                    &Vec::<serde_json::Value>::new(),
+                    &cfg.output_format,
+                    cfg.agent_mode,
+                    None,
+                )?;
+            }
+        }
+        return Ok(());
+    }
+
+    match cfg.output_format {
+        crate::config::OutputFormat::Table => {
+            for ext in &exts {
+                let desc = if ext.description.is_empty() {
+                    String::new()
+                } else {
+                    format!(" - {}", ext.description)
+                };
+                println!("{} v{}{}", ext.name, ext.version, desc);
+            }
+        }
+        _ => {
+            let items: Vec<serde_json::Value> = exts
+                .iter()
+                .map(|ext| {
+                    serde_json::json!({
+                        "name": ext.name,
+                        "version": ext.version,
+                        "source": ext.source,
+                        "description": ext.description,
+                        "installed_at": ext.installed_at,
+                    })
+                })
+                .collect();
+            crate::formatter::format_and_print(&items, &cfg.output_format, cfg.agent_mode, None)?;
+        }
+    }
+    Ok(())
+}
+
+/// Options for installing an extension.
+pub struct InstallOptions {
+    pub source: String,
+    pub tag: Option<String>,
+    pub local: bool,
+    pub link: bool,
+    pub name: Option<String>,
+    pub force: bool,
+    pub description: Option<String>,
+}
+
+/// Install an extension from a source.
+pub fn install(_cfg: &Config, opts: InstallOptions) -> Result<()> {
+    let InstallOptions {
+        source,
+        tag,
+        local,
+        link,
+        name,
+        force,
+        description,
+    } = opts;
+    if local {
+        let source_path = PathBuf::from(&source);
+        // Derive name from filename if not provided.
+        let ext_name = match name {
+            Some(n) => n,
+            None => {
+                let file_name = source_path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("");
+                // Strip pup- prefix and .exe suffix if present.
+                let stripped = file_name.strip_prefix("pup-").unwrap_or(file_name);
+                let stripped = stripped.strip_suffix(".exe").unwrap_or(stripped);
+                if stripped.is_empty() {
+                    bail!(
+                        "could not derive extension name from '{}', use --name to specify it",
+                        source
+                    );
+                }
+                stripped.to_string()
+            }
+        };
+
+        extensions::install::install_from_local(
+            &source_path,
+            &ext_name,
+            link,
+            force,
+            description.as_deref(),
+        )?;
+        if link {
+            println!("Linked extension '{ext_name}' from {source}");
+        } else {
+            println!("Installed extension '{ext_name}' from {source}");
+        }
+        return Ok(());
+    }
+
+    // GitHub-based installation: source is "owner/repo".
+    extensions::install::install_from_github(
+        &source,
+        tag.as_deref(),
+        name.as_deref(),
+        force,
+        description.as_deref(),
+    )?;
+
+    let display_name = name.unwrap_or_else(|| {
+        let repo = source.split('/').nth(1).unwrap_or(&source);
+        extensions::install::derive_name_from_repo(repo)
+    });
+    println!("Installed extension '{display_name}' from github:{source}");
+
+    Ok(())
+}
+
+/// Remove an installed extension.
+pub fn remove(_cfg: &Config, name: String) -> Result<()> {
+    extensions::install::remove_extension(&name)?;
+    println!("Removed extension '{name}'");
+    Ok(())
+}
+
+/// Upgrade one or all installed extensions.
+pub fn upgrade(_cfg: &Config, name: Option<String>, all: bool) -> Result<()> {
+    if all {
+        let results = extensions::install::upgrade_all_extensions()?;
+        for msg in &results {
+            println!("{msg}");
+        }
+        return Ok(());
+    }
+
+    match name {
+        Some(n) => {
+            let msg = extensions::install::upgrade_extension(&n)?;
+            println!("{msg}");
+        }
+        None => {
+            bail!(
+                "specify an extension name to upgrade, or use --all to upgrade all extensions.\n\
+                 Usage: pup extension upgrade <name>\n\
+                 Usage: pup extension upgrade --all"
+            );
+        }
+    }
+    Ok(())
+}

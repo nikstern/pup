@@ -23,6 +23,8 @@ pub mod ddsql;
 pub mod downtime;
 pub mod error_tracking;
 pub mod events;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod extension;
 pub mod fleet;
 pub mod google_chat;
 pub mod hamr;
