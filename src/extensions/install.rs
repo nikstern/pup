@@ -714,6 +714,10 @@ mod tests {
                     name: "pup-hello-darwin-x86_64".to_string(),
                     browser_download_url: "https://example.com/darwin-x86_64".to_string(),
                 },
+                GitHubAsset {
+                    name: "pup-hello-windows-x86_64".to_string(),
+                    browser_download_url: "https://example.com/windows-x86_64".to_string(),
+                },
             ],
         };
         let asset = find_platform_asset(&release, "hello").unwrap();
