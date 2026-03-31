@@ -792,6 +792,38 @@ enum Commands {
         #[command(subcommand)]
         action: DataGovActions,
     },
+    /// Manage Deployment Gates
+    ///
+    /// Deployment Gates reduce the likelihood and impact of incidents caused by deployments.
+    ///
+    /// COMMANDS:
+    ///   gates list                  List all deployment gates
+    ///   gates get <id>              Get a deployment gate by ID
+    ///   gates create --file <f>     Create a deployment gate from JSON file
+    ///   gates update <id> --file    Update a deployment gate
+    ///   gates delete <id>           Delete a deployment gate
+    ///   evaluations get <id>        Get a deployment gates evaluation result
+    ///   evaluations trigger --file  Trigger a deployment gates evaluation
+    ///   rules list <gate-id>        List rules for a deployment gate
+    ///   rules get <gate-id> <id>    Get a specific deployment rule
+    ///   rules create <gate-id> -f   Create a deployment rule
+    ///   rules update <gate-id> <id> Update a deployment rule
+    ///   rules delete <gate-id> <id> Delete a deployment rule
+    ///
+    /// EXAMPLES:
+    ///   pup deployment-gates gates list
+    ///   pup deployment-gates gates get my-gate-id
+    ///   pup deployment-gates gates create --file gate.json
+    ///   pup deployment-gates evaluations trigger --file eval.json
+    ///   pup deployment-gates rules list my-gate-id
+    ///
+    /// AUTHENTICATION:
+    ///   Requires OAuth2 (via 'pup auth login') or DD_API_KEY + DD_APP_KEY.
+    #[command(name = "deployment-gates", verbatim_doc_comment)]
+    DeploymentGates {
+        #[command(subcommand)]
+        action: DeploymentGatesActions,
+    },
     /// Query Datadog data using DDSQL (Datadog SQL)
     ///
     /// DDSQL lets you query metrics, logs, and reference tables using SQL syntax.
@@ -4445,6 +4477,88 @@ enum DataGovScannerRuleActions {
     List,
 }
 
+// ---- Deployment Gates ----
+#[derive(Subcommand)]
+enum DeploymentGatesActions {
+    /// Manage deployment gates (CRUD)
+    Gates {
+        #[command(subcommand)]
+        action: DeploymentGatesGateActions,
+    },
+    /// Manage deployment gate evaluations
+    Evaluations {
+        #[command(subcommand)]
+        action: DeploymentGatesEvaluationActions,
+    },
+    /// Manage deployment gate rules
+    Rules {
+        #[command(subcommand)]
+        action: DeploymentGatesRuleActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum DeploymentGatesGateActions {
+    /// List all deployment gates
+    List {
+        /// Pagination cursor
+        #[arg(long)]
+        page_cursor: Option<String>,
+        /// Page size (1-1000, default 50)
+        #[arg(long)]
+        page_size: Option<i64>,
+    },
+    /// Get a deployment gate by ID
+    Get { gate_id: String },
+    /// Create a deployment gate from a JSON file
+    Create {
+        #[arg(long)]
+        file: String,
+    },
+    /// Update a deployment gate from a JSON file
+    Update {
+        gate_id: String,
+        #[arg(long)]
+        file: String,
+    },
+    /// Delete a deployment gate
+    Delete { gate_id: String },
+}
+
+#[derive(Subcommand)]
+enum DeploymentGatesEvaluationActions {
+    /// Get a deployment gates evaluation result by evaluation ID (UUID)
+    Get { evaluation_id: String },
+    /// Trigger a deployment gates evaluation from a JSON file
+    Trigger {
+        #[arg(long)]
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DeploymentGatesRuleActions {
+    /// List rules for a deployment gate
+    List { gate_id: String },
+    /// Get a specific deployment rule
+    Get { gate_id: String, rule_id: String },
+    /// Create a deployment rule from a JSON file
+    Create {
+        gate_id: String,
+        #[arg(long)]
+        file: String,
+    },
+    /// Update a deployment rule from a JSON file
+    Update {
+        gate_id: String,
+        rule_id: String,
+        #[arg(long)]
+        file: String,
+    },
+    /// Delete a deployment rule
+    Delete { gate_id: String, rule_id: String },
+}
+
 // ---- Error Tracking ----
 #[derive(Subcommand)]
 enum ErrorTrackingActions {
@@ -7993,6 +8107,62 @@ async fn main_inner() -> anyhow::Result<()> {
                             commands::data_governance::scanner_rules_list(&cfg).await?;
                         }
                     },
+                },
+            }
+        }
+        // --- Deployment Gates ---
+        Commands::DeploymentGates { action } => {
+            cfg.validate_auth()?;
+            match action {
+                DeploymentGatesActions::Gates { action } => match action {
+                    DeploymentGatesGateActions::List {
+                        page_cursor,
+                        page_size,
+                    } => {
+                        commands::deployment_gates::list(&cfg, page_cursor, page_size).await?;
+                    }
+                    DeploymentGatesGateActions::Get { gate_id } => {
+                        commands::deployment_gates::get(&cfg, &gate_id).await?;
+                    }
+                    DeploymentGatesGateActions::Create { file } => {
+                        commands::deployment_gates::create(&cfg, &file).await?;
+                    }
+                    DeploymentGatesGateActions::Update { gate_id, file } => {
+                        commands::deployment_gates::update(&cfg, &gate_id, &file).await?;
+                    }
+                    DeploymentGatesGateActions::Delete { gate_id } => {
+                        commands::deployment_gates::delete(&cfg, &gate_id).await?;
+                    }
+                },
+                DeploymentGatesActions::Evaluations { action } => match action {
+                    DeploymentGatesEvaluationActions::Get { evaluation_id } => {
+                        commands::deployment_gates::evaluation_get(&cfg, &evaluation_id).await?;
+                    }
+                    DeploymentGatesEvaluationActions::Trigger { file } => {
+                        commands::deployment_gates::evaluation_trigger(&cfg, &file).await?;
+                    }
+                },
+                DeploymentGatesActions::Rules { action } => match action {
+                    DeploymentGatesRuleActions::List { gate_id } => {
+                        commands::deployment_gates::rules_list(&cfg, &gate_id).await?;
+                    }
+                    DeploymentGatesRuleActions::Get { gate_id, rule_id } => {
+                        commands::deployment_gates::rule_get(&cfg, &gate_id, &rule_id).await?;
+                    }
+                    DeploymentGatesRuleActions::Create { gate_id, file } => {
+                        commands::deployment_gates::rule_create(&cfg, &gate_id, &file).await?;
+                    }
+                    DeploymentGatesRuleActions::Update {
+                        gate_id,
+                        rule_id,
+                        file,
+                    } => {
+                        commands::deployment_gates::rule_update(&cfg, &gate_id, &rule_id, &file)
+                            .await?;
+                    }
+                    DeploymentGatesRuleActions::Delete { gate_id, rule_id } => {
+                        commands::deployment_gates::rule_delete(&cfg, &gate_id, &rule_id).await?;
+                    }
                 },
             }
         }
