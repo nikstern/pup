@@ -15,7 +15,7 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn login(cfg: &Config, scopes: Vec<String>) -> Result<()> {
+pub async fn login(cfg: &Config, scopes: Vec<String>, subdomain: Option<&str>) -> Result<()> {
     use crate::auth::{dcr, pkce};
 
     let site = &cfg.site;
@@ -26,6 +26,9 @@ pub async fn login(cfg: &Config, scopes: Vec<String>) -> Result<()> {
     let redirect_uri = server.redirect_uri();
     let org_label = org.map(|o| format!(" (org: {o})")).unwrap_or_default();
     eprintln!("\n🔐 Starting OAuth2 login for site: {site}{org_label}\n");
+    if let Some(sub) = subdomain {
+        eprintln!("🏢 Using SAML/SSO subdomain: {sub}.datadoghq.com");
+    }
     eprintln!("📡 Callback server started on: {redirect_uri}");
 
     let scope_strs: Vec<&str> = scopes.iter().map(String::as_str).collect();
@@ -73,6 +76,7 @@ pub async fn login(cfg: &Config, scopes: Vec<String>) -> Result<()> {
         &state,
         &challenge,
         &scope_strs,
+        subdomain,
     );
 
     // 5. Open browser
@@ -121,7 +125,7 @@ pub async fn login(cfg: &Config, scopes: Vec<String>) -> Result<()> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn login(_cfg: &Config, _scopes: Vec<String>) -> Result<()> {
+pub async fn login(_cfg: &Config, _scopes: Vec<String>, _subdomain: Option<&str>) -> Result<()> {
     bail!(
         "OAuth login is not available in WASM builds.\n\
          Use DD_ACCESS_TOKEN env var for bearer token auth,\n\

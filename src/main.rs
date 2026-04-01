@@ -6260,6 +6260,9 @@ enum AuthActions {
         /// Overrides DD_SITE env var and config file. Defaults to datadoghq.com.
         #[arg(long, value_name = "SITE")]
         site: Option<String>,
+        /// Organization subdomain for SAML/SSO login (e.g. mycompany for mycompany.datadoghq.com).
+        #[arg(long, value_name = "SUBDOMAIN")]
+        subdomain: Option<String>,
     },
     /// Logout and clear tokens
     Logout,
@@ -9365,6 +9368,7 @@ async fn main_inner() -> anyhow::Result<()> {
                 scopes,
                 read_only,
                 site,
+                subdomain,
             } => {
                 if let Some(s) = site {
                     cfg.site = s;
@@ -9372,7 +9376,7 @@ async fn main_inner() -> anyhow::Result<()> {
                 let is_read_only = read_only || cfg.read_only;
                 let resolved =
                     resolve_login_scopes(scopes.as_deref(), cfg.org.as_deref(), is_read_only);
-                commands::auth::login(&cfg, resolved).await?
+                commands::auth::login(&cfg, resolved, subdomain.as_deref()).await?
             }
             AuthActions::Logout => commands::auth::logout(&cfg).await?,
             AuthActions::Status { site } => {
