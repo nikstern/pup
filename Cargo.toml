@@ -99,7 +99,7 @@ regex = { version = "1", optional = true }
 comfy-table = { version = "7", default-features = false }
 
 # Auth — OAuth2 PKCE + token storage (optional — not needed for browser)
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
 base64 = { version = "0.22", optional = true }
 rand = { version = "0.9", optional = true }
 url = { version = "2", optional = true }
@@ -146,8 +146,8 @@ js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 
-# RNG support in browser WASM (getrandom 0.2 with JS backend)
-getrandom = { version = "0.2", features = ["js"], optional = true }
+# RNG support in browser WASM (getrandom 0.4 — wasm_js feature enables JS crypto API)
+getrandom = { version = "0.4", features = ["wasm_js"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
