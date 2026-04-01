@@ -194,6 +194,7 @@ impl DcrClient {
         state: &str,
         challenge: &super::pkce::PkceChallenge,
         scopes: &[&str],
+        subdomain: Option<&str>,
     ) -> String {
         let scope = scopes.join(" ");
         let params = url::form_urlencoded::Serializer::new(String::new())
@@ -205,6 +206,12 @@ impl DcrClient {
             .append_pair("code_challenge", &challenge.challenge)
             .append_pair("code_challenge_method", &challenge.method)
             .finish();
-        format!("https://app.{}/oauth2/v1/authorize?{params}", self.site)
+
+        // Use custom subdomain for SAML/SSO auth, otherwise use standard app.{site}
+        let auth_host = match subdomain {
+            Some(sub) => format!("{sub}.datadoghq.com"),
+            None => format!("app.{}", self.site),
+        };
+        format!("https://{auth_host}/oauth2/v1/authorize?{params}")
     }
 }
