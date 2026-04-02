@@ -184,16 +184,24 @@ pup security rules list
 
 ### Live Debugger
 ```bash
+# Check service context (verify env has active instances)
+pup debugger context my-svc
+pup debugger context my-svc --env prod
+
 # Find probe-able methods in a service
 pup symdb search --service my-svc --query MyController --view probe-locations
 
-# Place a log probe to capture runtime arguments/variables
+# Place a log probe with capture expressions
 pup debugger probes create --service my-svc --env prod \
   --probe-location "com.example.MyController:handleRequest" \
-  --template "handleRequest called with id={id}"
+  --capture "request.id" --capture "request.headers" \
+  --ttl 1h
 
-# Watch probe events in real time
-pup debugger probes watch <PROBE_ID> --timeout 60 --limit 10 --wait 5
+# Watch probe events — compact output
+pup debugger probes watch <PROBE_ID> --fields "message,captures,timestamp" --timeout 60 --limit 10 --wait 5
+
+# Watch — template message only
+pup debugger probes watch <PROBE_ID> --fields "message" --limit 10
 
 # List and delete probes
 pup debugger probes list --service my-svc

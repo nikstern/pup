@@ -78,9 +78,12 @@ pub struct ProbeCreateParams<'a> {
     pub template: Option<&'a str>,
     pub condition: Option<&'a str>,
     pub snapshot: bool,
+    pub capture_expressions: Vec<&'a str>,
     pub rate: u32,
     pub budget: u32,
     pub ttl: Option<&'a str>,
+    pub depth: u32,
+    pub fields: Option<&'a str>,
 }
 
 struct ResolvedProbe<'a> {
@@ -93,9 +96,11 @@ struct ResolvedProbe<'a> {
     segments: serde_json::Value,
     when: Option<serde_json::Value>,
     snapshot: bool,
+    capture_expressions: Vec<serde_json::Value>,
     rate: u32,
     budget: u32,
     expires_ms: Option<i64>,
+    depth: u32,
 }
 
 fn default_template(type_name: &str, method_name: &str) -> (String, serde_json::Value) {
@@ -108,9 +113,93 @@ fn default_template(type_name: &str, method_name: &str) -> (String, serde_json::
     (tmpl, segs)
 }
 
+fn capture_expr_name(dsl: &str) -> String {
+    dsl.replace('.', "_")
+}
+
+#[cfg(feature = "native")]
+async fn parse_capture_expressions(
+    cfg: &Config,
+    expressions: &[&str],
+    depth: u32,
+) -> Result<Vec<serde_json::Value>> {
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
+    let futs: Vec<_> = expressions
+        .iter()
+        .map(|expr| {
+            let expr = expr.to_string();
+            let sem = sem.clone();
+            async move {
+                let _permit = sem.acquire().await;
+                let body = serde_json::json!({
+                    "data": {
+                        "type": "parse-template",
+                        "attributes": {
+                            "template": format!("{{{expr}}}")
+                        }
+                    }
+                });
+                let resp = post_lenient(cfg, "/api/ui/debugger/parse-template", body).await?;
+                if let Some(msg) = extract_api_errors(&resp) {
+                    anyhow::bail!("invalid capture expression '{expr}': {msg}");
+                }
+                let seg = &resp["data"]["attributes"]["segments"][0];
+                let dsl = seg["dsl"].clone();
+                let json_val = seg["json"].clone();
+                if dsl.is_null() || json_val.is_null() {
+                    anyhow::bail!(
+                        "failed to parse capture expression '{expr}': no dsl/json in response"
+                    );
+                }
+                Ok(serde_json::json!({
+                    "name": capture_expr_name(&expr),
+                    "expr": { "dsl": dsl, "json": json_val },
+                    "capture": { "max_reference_depth": depth }
+                }))
+            }
+        })
+        .collect();
+    futures::future::join_all(futs).await.into_iter().collect()
+}
+
+#[cfg(not(feature = "native"))]
+async fn parse_capture_expressions(
+    cfg: &Config,
+    expressions: &[&str],
+    depth: u32,
+) -> Result<Vec<serde_json::Value>> {
+    let mut results = Vec::with_capacity(expressions.len());
+    for expr in expressions {
+        let body = serde_json::json!({
+            "data": {
+                "type": "parse-template",
+                "attributes": {
+                    "template": format!("{{{expr}}}")
+                }
+            }
+        });
+        let resp = post_lenient(cfg, "/api/ui/debugger/parse-template", body).await?;
+        if let Some(msg) = extract_api_errors(&resp) {
+            anyhow::bail!("invalid capture expression '{expr}': {msg}");
+        }
+        let seg = &resp["data"]["attributes"]["segments"][0];
+        let dsl = seg["dsl"].clone();
+        let json_val = seg["json"].clone();
+        if dsl.is_null() || json_val.is_null() {
+            anyhow::bail!("failed to parse capture expression '{expr}': no dsl/json in response");
+        }
+        results.push(serde_json::json!({
+            "name": capture_expr_name(expr),
+            "expr": { "dsl": dsl, "json": json_val },
+            "capture": { "max_reference_depth": depth }
+        }));
+    }
+    Ok(results)
+}
+
 fn build_probe_payload(p: &ResolvedProbe<'_>) -> serde_json::Value {
     let mut probe = serde_json::json!({
-        "capture": { "max_reference_depth": 3 },
+        "capture": { "max_reference_depth": p.depth },
         "capture_snapshot": p.snapshot,
         "template": p.template_str,
         "segments": p.segments,
@@ -127,6 +216,10 @@ fn build_probe_payload(p: &ResolvedProbe<'_>) -> serde_json::Value {
 
     if let Some(w) = &p.when {
         probe["when"] = w.clone();
+    }
+
+    if !p.capture_expressions.is_empty() {
+        probe["capture_expressions"] = serde_json::Value::Array(p.capture_expressions.clone());
     }
 
     let mut payload = serde_json::json!({
@@ -180,9 +273,12 @@ pub async fn probes_create(cfg: &Config, params: ProbeCreateParams<'_>) -> Resul
         template,
         condition,
         snapshot,
+        capture_expressions,
         rate,
         budget,
         ttl,
+        depth,
+        fields,
     } = params;
     let expires_ms = if let Some(ttl_str) = ttl {
         Some(crate::util::now_millis() + crate::util::parse_duration_to_millis(ttl_str)?)
@@ -216,6 +312,9 @@ pub async fn probes_create(cfg: &Config, params: ProbeCreateParams<'_>) -> Resul
         None
     };
 
+    // Parse capture expressions via parse-template (wrap as "{expr}" template)
+    let parsed_captures = parse_capture_expressions(cfg, &capture_expressions, depth).await?;
+
     // Build segments and template string
     let (template_str, segments) = if let Some(tmpl) = template {
         let body = serde_json::json!({
@@ -246,13 +345,72 @@ pub async fn probes_create(cfg: &Config, params: ProbeCreateParams<'_>) -> Resul
         segments,
         when,
         snapshot,
+        capture_expressions: parsed_captures,
         rate,
         budget,
         expires_ms,
+        depth,
     });
 
     let resp = post(cfg, PROBES_PATH, payload).await?;
-    formatter::output(cfg, &resp)
+
+    match fields {
+        Some(field_list) => {
+            let output = extract_create_fields(&resp, field_list);
+            formatter::output(cfg, &output)
+        }
+        None => formatter::output(cfg, &resp),
+    }
+}
+
+fn extract_create_fields(resp: &serde_json::Value, field_list: &str) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    for field in field_list.split(',').map(|f| f.trim()) {
+        match field {
+            "id" => {
+                if let Some(v) = resp.pointer("/data/id") {
+                    obj.insert("id".to_string(), v.clone());
+                }
+            }
+            "service" => {
+                if let Some(v) = resp.pointer("/data/attributes/metadata/service_name") {
+                    obj.insert("service".to_string(), v.clone());
+                }
+            }
+            "env" => {
+                if let Some(v) = resp
+                    .pointer("/data/attributes/metadata/enablement/queries/0/tags/0/values/0/value")
+                {
+                    obj.insert("env".to_string(), v.clone());
+                }
+            }
+            "location" => {
+                let probe = &resp["data"]["attributes"]["probe"]["where"];
+                if let (Some(t), Some(m)) =
+                    (probe["type_name"].as_str(), probe["method_name"].as_str())
+                {
+                    obj.insert(
+                        "location".to_string(),
+                        serde_json::json!(format!("{t}:{m}")),
+                    );
+                }
+            }
+            "template" => {
+                if let Some(v) = resp.pointer("/data/attributes/probe/template") {
+                    obj.insert("template".to_string(), v.clone());
+                }
+            }
+            "expires" => {
+                if let Some(v) = resp.pointer("/data/attributes/expires") {
+                    obj.insert("expires".to_string(), v.clone());
+                }
+            }
+            other => {
+                eprintln!("unknown field: {other}");
+            }
+        }
+    }
+    serde_json::Value::Object(obj)
 }
 
 pub async fn probes_delete(cfg: &Config, id: &str) -> Result<()> {
@@ -277,6 +435,7 @@ pub async fn probes_watch(
     timeout: u64,
     from: Option<&str>,
     wait: u64,
+    fields: Option<&str>,
 ) -> Result<()> {
     // Wait for the probe to appear in probe-statuses.  With --wait 0 (the
     // default) we check once and fail immediately if not found.
@@ -384,7 +543,38 @@ pub async fn probes_watch(
                         consecutive_errors = 0;
                         if let Some(logs) = resp.data {
                             for log in logs {
-                                formatter::output(cfg, &log)?;
+                                let log_json = serde_json::to_value(&log).unwrap_or_default();
+                                let output_value = if let Some(field_list) = fields {
+                                    let mut obj = serde_json::Map::new();
+                                    for field in field_list.split(',').map(|f| f.trim()) {
+                                        match field {
+                                            "message" => {
+                                                if let Some(v) = log_json.pointer("/attributes/message") {
+                                                    obj.insert("message".to_string(), v.clone());
+                                                }
+                                            }
+                                            "captures" => {
+                                                if let Some(v) = log_json.pointer("/attributes/attributes/debugger/snapshot/captures") {
+                                                    obj.insert("captures".to_string(), v.clone());
+                                                }
+                                            }
+                                            "timestamp" => {
+                                                if let Some(v) = log_json.pointer("/attributes/timestamp") {
+                                                    obj.insert("timestamp".to_string(), v.clone());
+                                                }
+                                            }
+                                            other => {
+                                                eprintln!("unknown field: {other}");
+                                            }
+                                        }
+                                    }
+                                    serde_json::Value::Object(obj)
+                                } else {
+                                    log_json.pointer("/attributes/attributes/debugger")
+                                        .cloned()
+                                        .unwrap_or(log_json.clone())
+                                };
+                                formatter::output(cfg, &output_value)?;
                                 event_count += 1;
 
                                 // Advance from past this event's timestamp to
@@ -427,8 +617,77 @@ pub async fn probes_watch(
     _timeout: u64,
     _from: Option<&str>,
     _wait: u64,
+    _fields: Option<&str>,
 ) -> Result<()> {
     anyhow::bail!("watch is not supported in wasm builds")
+}
+
+// --- Context subcommand ---
+
+pub async fn context(
+    cfg: &Config,
+    service: &str,
+    env: Option<&str>,
+    fields: Option<&str>,
+) -> Result<()> {
+    let path = "/api/unstable/debugger/live-debugger/service-context";
+    let data = get(cfg, path, &[("service", service)]).await?;
+
+    let data = match env {
+        Some(env_filter) => filter_context_env(&data, env_filter),
+        None => data,
+    };
+
+    match fields {
+        Some(field_list) => formatter::output(cfg, &extract_context_fields(&data, field_list)),
+        None => formatter::output(cfg, &data),
+    }
+}
+
+fn extract_context_fields(data: &serde_json::Value, field_list: &str) -> serde_json::Value {
+    let attrs = &data["data"]["attributes"];
+    let mut obj = serde_json::Map::new();
+    for field in field_list.split(',').map(|f| f.trim()) {
+        match field {
+            "service" => {
+                if let Some(v) = attrs.get("service") {
+                    obj.insert("service".into(), v.clone());
+                }
+            }
+            "language" => {
+                if let Some(v) = attrs.get("language") {
+                    obj.insert("language".into(), v.clone());
+                }
+            }
+            "envs" => {
+                let envs: Vec<&str> = attrs["environments"]
+                    .as_array()
+                    .map(|arr| arr.iter().filter_map(|e| e["env"].as_str()).collect())
+                    .unwrap_or_default();
+                obj.insert("envs".into(), serde_json::json!(envs));
+            }
+            "repo" => {
+                if let Some(v) = attrs.get("git_repository_url") {
+                    obj.insert("repo".into(), v.clone());
+                }
+            }
+            other => {
+                eprintln!("unknown field: {other}");
+            }
+        }
+    }
+    serde_json::Value::Object(obj)
+}
+
+fn filter_context_env(data: &serde_json::Value, env_filter: &str) -> serde_json::Value {
+    let mut filtered = data.clone();
+    if let Some(envs) = filtered
+        .pointer_mut("/data/attributes/environments")
+        .and_then(|v| v.as_array_mut())
+    {
+        envs.retain(|e| e["env"].as_str() == Some(env_filter));
+    }
+    filtered
 }
 
 #[cfg(test)]
@@ -477,9 +736,11 @@ mod tests {
             segments,
             when: None,
             snapshot: true,
+            capture_expressions: vec![],
             rate: 1,
             budget: 500,
             expires_ms: None,
+            depth: 3,
         };
         overrides(&mut rp);
         build_probe_payload(&rp)
@@ -606,5 +867,175 @@ mod tests {
     fn test_extract_api_errors_no_errors_field() {
         let resp = serde_json::json!({ "data": {} });
         assert!(extract_api_errors(&resp).is_none());
+    }
+
+    #[test]
+    fn test_capture_expr_name_simple_ref() {
+        assert_eq!(capture_expr_name("userId"), "userId");
+    }
+
+    #[test]
+    fn test_capture_expr_name_dotted() {
+        assert_eq!(
+            capture_expr_name("vets.vets[1].firstName"),
+            "vets_vets[1]_firstName"
+        );
+    }
+
+    #[test]
+    fn test_capture_expr_name_nested() {
+        assert_eq!(
+            capture_expr_name("deepObjs[len(garbage)].next.next"),
+            "deepObjs[len(garbage)]_next_next"
+        );
+    }
+
+    #[test]
+    fn test_build_probe_payload_capture_expressions() {
+        let captures = vec![serde_json::json!({
+            "name": "user_name",
+            "expr": {
+                "dsl": "user.name",
+                "json": {
+                    "getmember": [{"ref": "user"}, "name"]
+                }
+            },
+            "capture": {
+                "max_reference_depth": 3,
+            }
+        })];
+        let payload = test_resolved_probe(|rp| {
+            rp.snapshot = false;
+            rp.capture_expressions = captures;
+        });
+        let probe = &payload["data"]["attributes"]["probe"];
+        assert_eq!(probe["capture_snapshot"], false);
+        assert_eq!(probe["capture_expressions"][0]["name"], "user_name");
+        assert_eq!(probe["capture_expressions"][0]["expr"]["dsl"], "user.name");
+        assert_eq!(
+            probe["capture_expressions"][0]["capture"]["max_reference_depth"],
+            3
+        );
+    }
+
+    #[test]
+    fn test_build_probe_payload_no_capture_expressions() {
+        let payload = test_resolved_probe(|rp| {
+            rp.snapshot = false;
+        });
+        let probe = &payload["data"]["attributes"]["probe"];
+        assert!(probe.get("capture_expressions").is_none());
+    }
+
+    #[test]
+    fn test_build_probe_payload_custom_depth() {
+        let payload = test_resolved_probe(|rp| {
+            rp.depth = 5;
+        });
+        let probe = &payload["data"]["attributes"]["probe"];
+        assert_eq!(probe["capture"]["max_reference_depth"], 5);
+    }
+
+    fn sample_create_response() -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "id": "082b17fd-c75c-4ab0-8426-3456b98d7600",
+                "type": "di_log_probe",
+                "attributes": {
+                    "expires": 1775146304000_i64,
+                    "metadata": {
+                        "service_name": "debugger-demo-java",
+                        "enablement": {
+                            "queries": [{
+                                "tags": [{
+                                    "key": "env",
+                                    "values": [{ "value": "prod", "is_excluded": false }]
+                                }]
+                            }]
+                        }
+                    },
+                    "probe": {
+                        "template": "showVetList called with page={page}",
+                        "where": {
+                            "type_name": "org.springframework.samples.petclinic.vet.VetController",
+                            "method_name": "showVetList"
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn test_extract_create_fields_id() {
+        let resp = sample_create_response();
+        let out = extract_create_fields(&resp, "id");
+        assert_eq!(out["id"], "082b17fd-c75c-4ab0-8426-3456b98d7600");
+        assert!(out.get("service").is_none());
+    }
+
+    #[test]
+    fn test_extract_create_fields_all() {
+        let resp = sample_create_response();
+        let out = extract_create_fields(&resp, "id,service,env,location,template,expires");
+        assert_eq!(out["id"], "082b17fd-c75c-4ab0-8426-3456b98d7600");
+        assert_eq!(out["service"], "debugger-demo-java");
+        assert_eq!(out["env"], "prod");
+        assert_eq!(
+            out["location"],
+            "org.springframework.samples.petclinic.vet.VetController:showVetList"
+        );
+        assert_eq!(out["template"], "showVetList called with page={page}");
+        assert_eq!(out["expires"], 1775146304000_i64);
+    }
+
+    #[test]
+    fn test_extract_create_fields_ignores_unknown() {
+        let resp = sample_create_response();
+        let out = extract_create_fields(&resp, "id,bogus");
+        assert_eq!(out["id"], "082b17fd-c75c-4ab0-8426-3456b98d7600");
+        assert!(out.get("bogus").is_none());
+    }
+
+    fn sample_context_response() -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "attributes": {
+                    "service": "my-service",
+                    "language": "java",
+                    "git_repository_url": "https://github.com/example/repo",
+                    "environments": [
+                        { "env": "staging", "instance_groups": [] },
+                        { "env": "production", "instance_groups": [] }
+                    ]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn test_extract_context_fields_envs() {
+        let data = sample_context_response();
+        let out = extract_context_fields(&data, "envs");
+        assert_eq!(out["envs"], serde_json::json!(["staging", "production"]));
+        assert!(out.get("service").is_none());
+    }
+
+    #[test]
+    fn test_extract_context_fields_all() {
+        let data = sample_context_response();
+        let out = extract_context_fields(&data, "service,language,envs,repo");
+        assert_eq!(out["service"], "my-service");
+        assert_eq!(out["language"], "java");
+        assert_eq!(out["envs"], serde_json::json!(["staging", "production"]));
+        assert_eq!(out["repo"], "https://github.com/example/repo");
+    }
+
+    #[test]
+    fn test_extract_context_fields_ignores_unknown() {
+        let data = sample_context_response();
+        let out = extract_context_fields(&data, "service,bogus");
+        assert_eq!(out["service"], "my-service");
+        assert!(out.get("bogus").is_none());
     }
 }

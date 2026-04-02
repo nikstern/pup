@@ -298,6 +298,18 @@ pup apm troubleshooting list --hostname my-host --timeframe 4h
 
 ## Live Debugger
 
+### Service Context
+```bash
+# Get full service context as JSON (environments, instances, probe support)
+pup debugger context my-service
+
+# Filter to a specific environment
+pup debugger context my-service --env staging
+
+# Select specific fields for compact output: service, language, envs, repo
+pup debugger context my-service --fields service,language,envs
+```
+
 ### List Log Probes
 ```bash
 # List all log probes
@@ -314,32 +326,42 @@ pup debugger probes get "probe-id"
 
 ### Create a Log Probe
 ```bash
-# Create a basic log probe on a method
+# Create a probe with capture expressions (recommended)
 pup debugger probes create \
   --service my-service \
   --env staging \
-  --probe-location com.example.MyClass:myMethod
+  --probe-location com.example.MyClass:myMethod \
+  --capture "request.id" --capture "user.name"
+
+# Increase capture depth for nested objects (default: 1)
+pup debugger probes create \
+  --service my-service \
+  --env staging \
+  --probe-location com.example.MyClass:myMethod \
+  --capture "response.body" --depth 3
+
+# Create with full snapshot capture
+pup debugger probes create \
+  --service my-service \
+  --env staging \
+  --probe-location com.example.MyClass:myMethod \
+  --capture
 
 # Create with a custom template
 pup debugger probes create \
   --service my-service \
   --env staging \
   --probe-location com.example.MyClass:myMethod \
-  --template "User {userId} called with {arg0}"
+  --capture "userId" \
+  --template "User {userId} called, took {@duration}ms"
 
 # Create with a condition
 pup debugger probes create \
   --service my-service \
   --env staging \
   --probe-location com.example.MyClass:myMethod \
+  --capture "userId" \
   --condition "userId != null"
-
-# Create without snapshot capture
-pup debugger probes create \
-  --service my-service \
-  --env staging \
-  --probe-location com.example.MyClass:myMethod \
-  --no-snapshot --rate 5
 
 # Create with custom budget and TTL
 pup debugger probes create \
@@ -356,7 +378,13 @@ pup debugger probes delete "probe-id"
 
 ### Watch Probe Events
 ```bash
-# Stream probe events (default 120s timeout)
+# Stream probe events — compact output (message, captures, timestamp)
+pup debugger probes watch "probe-id" --fields "message,captures,timestamp" --wait 10
+
+# Template message only (one line per event)
+pup debugger probes watch "probe-id" --fields "message" --limit 5
+
+# Full debugger payload (default — trimmed to just the debugger field)
 pup debugger probes watch "probe-id"
 
 # Limit to 5 events
@@ -377,9 +405,9 @@ pup debugger probes watch "probe-id" --wait 30
 # Search for a method, create a probe, and watch events
 pup symdb search --service my-service --query MyController --view probe-locations \
   | head -1 \
-  | xargs -I{} pup debugger probes create --service my-service --env staging --probe-location {} --ttl 1h \
+  | xargs -I{} pup debugger probes create --service my-service --env staging --probe-location {} --capture --ttl 1h \
   | jq -r .data.id \
-  | xargs -I{} pup debugger probes watch {} --wait 30 --limit 5
+  | xargs -I{} pup debugger probes watch {} --fields "message,captures,timestamp" --wait 30 --limit 5
 ```
 
 ## SymDB (Symbol Database)

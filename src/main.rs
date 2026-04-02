@@ -2690,6 +2690,15 @@ enum DebuggerActions {
         #[command(subcommand)]
         action: DebuggerProbeActions,
     },
+    /// Show service debugger context (environments, probe support, language features)
+    Context {
+        #[arg(help = "Service name")]
+        service: String,
+        #[arg(long, help = "Filter to a specific environment")]
+        env: Option<String>,
+        #[arg(long, help = "Comma-separated fields: service, language, envs, repo")]
+        fields: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2718,8 +2727,14 @@ enum DebuggerProbeActions {
         template: Option<String>,
         #[arg(long, help = "Condition expression")]
         condition: Option<String>,
-        #[arg(long, help = "Disable snapshot capture")]
-        no_snapshot: bool,
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "",
+            action = clap::ArgAction::Append,
+            help = "Capture expression (e.g., 'user.name'). Repeatable. Without value: full snapshot."
+        )]
+        capture: Vec<String>,
         #[arg(long, default_value_t = 1, help = "Snapshots per second")]
         rate: u32,
         #[arg(
@@ -2734,6 +2749,18 @@ enum DebuggerProbeActions {
             help = "Probe time-to-live (e.g., 10m, 1h, 24h). Probe auto-expires after this duration."
         )]
         ttl: String,
+        #[arg(
+            long,
+            default_value_t = 1,
+            value_parser = clap::value_parser!(u32).range(1..=5),
+            help = "Max object graph traversal depth for captures (1-5). Start low, increase to drill into nested objects."
+        )]
+        depth: u32,
+        #[arg(
+            long,
+            help = "Comma-separated fields to include: id, service, env, location, template, expires. Default: full response."
+        )]
+        fields: Option<String>,
     },
     /// Delete a log probe
     Delete {
@@ -2756,6 +2783,11 @@ enum DebuggerProbeActions {
             help = "Wait up to N seconds for the probe to become available"
         )]
         wait: u64,
+        #[arg(
+            long,
+            help = "Comma-separated fields to include: message, captures, timestamp. Default: full debugger payload."
+        )]
+        fields: Option<String>,
     },
 }
 
@@ -7682,15 +7714,23 @@ async fn main_inner() -> anyhow::Result<()> {
                         language,
                         template,
                         condition,
-                        no_snapshot,
+                        capture,
                         rate,
                         budget,
                         ttl,
+                        depth,
+                        fields,
                     } => {
                         let language = match language {
                             Some(l) => l,
                             None => commands::symdb::service_language(&cfg, &service).await?,
                         };
+                        let snapshot = capture.iter().any(|c| c.is_empty());
+                        let capture_expressions: Vec<&str> = capture
+                            .iter()
+                            .filter(|c| !c.is_empty())
+                            .map(|c| c.as_str())
+                            .collect();
                         commands::debugger::probes_create(
                             &cfg,
                             commands::debugger::ProbeCreateParams {
@@ -7700,10 +7740,13 @@ async fn main_inner() -> anyhow::Result<()> {
                                 language: &language,
                                 template: template.as_deref(),
                                 condition: condition.as_deref(),
-                                snapshot: !no_snapshot,
+                                snapshot,
+                                capture_expressions,
                                 rate,
                                 budget,
                                 ttl: Some(ttl.as_str()),
+                                depth,
+                                fields: fields.as_deref(),
                             },
                         )
                         .await?;
@@ -7717,6 +7760,7 @@ async fn main_inner() -> anyhow::Result<()> {
                         timeout,
                         from,
                         wait,
+                        fields,
                     } => {
                         commands::debugger::probes_watch(
                             &cfg,
@@ -7725,10 +7769,19 @@ async fn main_inner() -> anyhow::Result<()> {
                             timeout,
                             from.as_deref(),
                             wait,
+                            fields.as_deref(),
                         )
                         .await?;
                     }
                 },
+                DebuggerActions::Context {
+                    service,
+                    env,
+                    fields,
+                } => {
+                    commands::debugger::context(&cfg, &service, env.as_deref(), fields.as_deref())
+                        .await?;
+                }
             }
         }
         // --- Metrics ---

@@ -65,13 +65,16 @@ fn output_lines(cfg: &Config, lines: &[String]) -> Result<()> {
 }
 
 fn collect_names(data: &serde_json::Value) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     let mut names = Vec::new();
     if let Some(items) = data["data"].as_array() {
         for item in items {
             if let Some(scopes) = item["attributes"]["scopes"].as_array() {
                 for s in scopes {
                     if let Some(name) = s["scope"]["name"].as_str() {
-                        names.push(name.to_string());
+                        if seen.insert(name.to_string()) {
+                            names.push(name.to_string());
+                        }
                     }
                 }
             }
@@ -128,6 +131,7 @@ async fn collect_probe_locations(
 
     // First pass: collect direct probe locations and class names that need
     // a children lookup.
+    let mut seen = std::collections::HashSet::new();
     let mut lines: Vec<String> = Vec::new();
     let mut class_names: Vec<&str> = Vec::new();
 
@@ -141,7 +145,10 @@ async fn collect_probe_locations(
 
             if !pl.is_null() {
                 if let (Some(t), Some(m)) = (pl["type_name"].as_str(), pl["method_name"].as_str()) {
-                    lines.push(format!("{t}:{m}"));
+                    let loc = format!("{t}:{m}");
+                    if seen.insert(loc.clone()) {
+                        lines.push(loc);
+                    }
                 }
             } else if scope_type == "CLASS" {
                 if let Some(name) = s["scope"]["name"].as_str() {
@@ -170,7 +177,10 @@ async fn collect_probe_locations(
                 }
                 if let (Some(t), Some(m)) = (cpl["type_name"].as_str(), cpl["method_name"].as_str())
                 {
-                    lines.push(format!("{t}:{m}"));
+                    let loc = format!("{t}:{m}");
+                    if seen.insert(loc.clone()) {
+                        lines.push(loc);
+                    }
                 }
             }
         }
@@ -216,6 +226,35 @@ mod tests {
         });
         let names = collect_names(&data);
         assert_eq!(names, vec!["com.example.Foo", "com.example.Bar"]);
+    }
+
+    #[test]
+    fn test_collect_names_deduplicates_across_versions() {
+        let data = serde_json::json!({
+            "data": [
+                {
+                    "attributes": {
+                        "scopes": [
+                            {"scope": {"name": "com.example.Foo"}},
+                            {"scope": {"name": "com.example.Bar"}}
+                        ]
+                    }
+                },
+                {
+                    "attributes": {
+                        "scopes": [
+                            {"scope": {"name": "com.example.Bar"}},
+                            {"scope": {"name": "com.example.Baz"}}
+                        ]
+                    }
+                }
+            ]
+        });
+        let names = collect_names(&data);
+        assert_eq!(
+            names,
+            vec!["com.example.Foo", "com.example.Bar", "com.example.Baz"]
+        );
     }
 
     #[test]
