@@ -7,10 +7,22 @@ Rust-based CLI wrapper for Datadog APIs. Provides OAuth2 + API key authenticatio
 - **[COMMANDS.md](docs/COMMANDS.md)** - Complete command reference with all 49 domains
 - **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Git workflow, PR process, commit format
 - **[TESTING.md](docs/TESTING.md)** - Test strategy, coverage requirements, CI/CD
+- **[REVIEW.md](docs/REVIEW.md)** - Code review guidelines (read before submitting PRs)
 - **[OAUTH2.md](docs/OAUTH2.md)** - OAuth2 implementation details (DCR, PKCE, token storage)
 - **[EXAMPLES.md](docs/EXAMPLES.md)** - Usage examples and common workflows
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Design decisions and technical details
 - **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Common issues and debugging
+
+## Review Guidelines
+
+**All PRs are reviewed against [docs/REVIEW.md](docs/REVIEW.md).** Read it before submitting. Key rules:
+
+- **Reuse existing code.** Search `src/util.rs`, `src/formatter.rs`, `src/client.rs`, and `src/config.rs` before writing new helpers. Do not duplicate functionality that already exists.
+- **Test both paths.** Every change must include positive tests (happy path) and negative tests (error cases, bad input, edge cases).
+- **No malicious code.** Obfuscated logic, backdoors, exfiltration, or unauthorized network calls result in rejection and a ban.
+- **No vulnerable dependencies.** Only use latest stable crate versions with no known CVEs. Run `cargo audit` before submitting.
+- **Keep it simple.** Small functions, shallow nesting, no premature abstractions. If you need a comment to explain a line, rewrite the line instead.
+- **Minimal diffs.** One concern per PR. Don't touch unrelated code, reformat untouched files, or add unnecessary improvements.
 
 ## Quick Start
 
