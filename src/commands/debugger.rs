@@ -159,10 +159,7 @@ async fn parse_capture_expressions(
             }
         })
         .collect();
-    futures::future::join_all(futs)
-        .await
-        .into_iter()
-        .collect()
+    futures::future::join_all(futs).await.into_iter().collect()
 }
 
 #[cfg(not(feature = "native"))]
@@ -189,9 +186,7 @@ async fn parse_capture_expressions(
         let dsl = seg["dsl"].clone();
         let json_val = seg["json"].clone();
         if dsl.is_null() || json_val.is_null() {
-            anyhow::bail!(
-                "failed to parse capture expression '{expr}': no dsl/json in response"
-            );
+            anyhow::bail!("failed to parse capture expression '{expr}': no dsl/json in response");
         }
         results.push(serde_json::json!({
             "name": capture_expr_name(expr),
