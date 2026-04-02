@@ -2783,6 +2783,11 @@ enum DebuggerProbeActions {
             help = "Wait up to N seconds for the probe to become available"
         )]
         wait: u64,
+        #[arg(
+            long,
+            help = "Comma-separated fields to include: message, captures, timestamp. Default: full debugger payload."
+        )]
+        fields: Option<String>,
     },
 }
 
@@ -7747,6 +7752,7 @@ async fn main_inner() -> anyhow::Result<()> {
                         timeout,
                         from,
                         wait,
+                        fields,
                     } => {
                         commands::debugger::probes_watch(
                             &cfg,
@@ -7755,6 +7761,7 @@ async fn main_inner() -> anyhow::Result<()> {
                             timeout,
                             from.as_deref(),
                             wait,
+                            fields.as_deref(),
                         )
                         .await?;
                     }

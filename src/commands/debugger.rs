@@ -440,6 +440,7 @@ pub async fn probes_watch(
     timeout: u64,
     from: Option<&str>,
     wait: u64,
+    fields: Option<&str>,
 ) -> Result<()> {
     // Wait for the probe to appear in probe-statuses.  With --wait 0 (the
     // default) we check once and fail immediately if not found.
@@ -547,7 +548,38 @@ pub async fn probes_watch(
                         consecutive_errors = 0;
                         if let Some(logs) = resp.data {
                             for log in logs {
-                                formatter::output(cfg, &log)?;
+                                let log_json = serde_json::to_value(&log).unwrap_or_default();
+                                let output_value = if let Some(field_list) = fields {
+                                    let mut obj = serde_json::Map::new();
+                                    for field in field_list.split(',').map(|f| f.trim()) {
+                                        match field {
+                                            "message" => {
+                                                if let Some(v) = log_json.pointer("/attributes/message") {
+                                                    obj.insert("message".to_string(), v.clone());
+                                                }
+                                            }
+                                            "captures" => {
+                                                if let Some(v) = log_json.pointer("/attributes/attributes/debugger/snapshot/captures") {
+                                                    obj.insert("captures".to_string(), v.clone());
+                                                }
+                                            }
+                                            "timestamp" => {
+                                                if let Some(v) = log_json.pointer("/attributes/timestamp") {
+                                                    obj.insert("timestamp".to_string(), v.clone());
+                                                }
+                                            }
+                                            other => {
+                                                eprintln!("unknown field: {other}");
+                                            }
+                                        }
+                                    }
+                                    serde_json::Value::Object(obj)
+                                } else {
+                                    log_json.pointer("/attributes/attributes/debugger")
+                                        .cloned()
+                                        .unwrap_or(log_json.clone())
+                                };
+                                formatter::output(cfg, &output_value)?;
                                 event_count += 1;
 
                                 // Advance from past this event's timestamp to
@@ -590,6 +622,7 @@ pub async fn probes_watch(
     _timeout: u64,
     _from: Option<&str>,
     _wait: u64,
+    _fields: Option<&str>,
 ) -> Result<()> {
     anyhow::bail!("watch is not supported in wasm builds")
 }
