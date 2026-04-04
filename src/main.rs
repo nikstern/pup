@@ -4378,6 +4378,11 @@ enum RumActions {
     },
     /// List RUM events
     Events {
+        #[arg(
+            long,
+            help = "RUM query filter (e.g. '@type:error @application.name:\"My App\"')"
+        )]
+        query: Option<String>,
         #[arg(long, default_value = "1h")]
         from: String,
         #[arg(long, default_value = "now")]
@@ -8615,8 +8620,13 @@ async fn main_inner() -> anyhow::Result<()> {
                         commands::rum::apps_delete(&cfg, &app_id).await?;
                     }
                 },
-                RumActions::Events { from, to, limit } => {
-                    commands::rum::events_list(&cfg, from, to, limit).await?;
+                RumActions::Events {
+                    query,
+                    from,
+                    to,
+                    limit,
+                } => {
+                    commands::rum::events_list(&cfg, query, from, to, limit).await?;
                 }
                 RumActions::Sessions { action } => match action {
                     RumSessionActions::Search {
