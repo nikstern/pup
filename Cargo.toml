@@ -115,7 +115,7 @@ aes-gcm = { version = "0.10", optional = true }
 # Synthetics tunnel
 tokio-tungstenite = { version = "0.29", features = ["native-tls"], optional = true }
 yamux = { version = "0.13", optional = true }
-russh = { version = "0.59", optional = true }
+russh = { version = "0.60", optional = true }
 ssh-key = { version = "0.6", features = ["p256", "std"], optional = true }
 futures = { version = "0.3", optional = true }
 tokio-util = { version = "0.7", features = ["compat", "io"], optional = true }
@@ -140,10 +140,10 @@ dirs = { version = "6", optional = true }
 open = { version = "5", optional = true }
 
 # ---- Browser WASM dependencies (wasm-bindgen) ----
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-js-sys = { version = "0.3", optional = true }
-web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
+wasm-bindgen = { version = "=0.2.114", optional = true }
+wasm-bindgen-futures = { version = "=0.4.64", optional = true }
+js-sys = { version = "=0.3.91", optional = true }
+web-sys = { version = "=0.3.91", features = ["Window", "Storage"], optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 
 # RNG support in browser WASM (getrandom 0.4 — wasm_js feature enables JS crypto API)

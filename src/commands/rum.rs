@@ -78,7 +78,13 @@ pub async fn apps_delete(cfg: &Config, app_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn events_list(cfg: &Config, from: String, to: String, limit: i32) -> Result<()> {
+pub async fn events_list(
+    cfg: &Config,
+    query: Option<String>,
+    from: String,
+    to: String,
+    limit: i32,
+) -> Result<()> {
     let dd_cfg = client::make_dd_config(cfg);
     let api = match client::make_bearer_client(cfg) {
         Some(c) => RUMAPI::with_client_and_config(dd_cfg, c),
@@ -90,10 +96,13 @@ pub async fn events_list(cfg: &Config, from: String, to: String, limit: i32) -> 
     let to_dt =
         chrono::DateTime::from_timestamp_millis(util::parse_time_to_unix_millis(&to)?).unwrap();
 
-    let params = ListRUMEventsOptionalParams::default()
+    let mut params = ListRUMEventsOptionalParams::default()
         .filter_from(from_dt)
         .filter_to(to_dt)
         .page_limit(limit);
+    if let Some(q) = query {
+        params = params.filter_query(q);
+    }
 
     let resp = api
         .list_rum_events(params)
