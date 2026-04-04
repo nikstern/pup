@@ -833,6 +833,23 @@ enum Commands {
         #[command(subcommand)]
         action: DataGovActions,
     },
+    /// Search Database Monitoring query samples
+    ///
+    /// Query sample search uses Datadog's DBM logs analytics endpoint on `app.<site>`.
+    ///
+    /// COMMAND GROUPS:
+    ///   samples    Search captured database query samples
+    ///
+    /// EXAMPLES:
+    ///   pup dbm samples search --query "dbm_type:activity service:orders env:prod" --from 1h --limit 10
+    ///
+    /// AUTHENTICATION:
+    ///   Requires DD_API_KEY + DD_APP_KEY.
+    #[command(verbatim_doc_comment)]
+    Dbm {
+        #[command(subcommand)]
+        action: DbmActions,
+    },
     /// Query Datadog data using DDSQL (Datadog SQL)
     ///
     /// DDSQL lets you query metrics, logs, and reference tables using SQL syntax.
@@ -3230,6 +3247,45 @@ enum DowntimeActions {
     },
     /// Cancel a downtime
     Cancel { id: String },
+}
+
+// ---- DDSQL ----
+#[derive(Subcommand)]
+enum DbmActions {
+    /// Manage DBM query samples
+    Samples {
+        #[command(subcommand)]
+        action: DbmSamplesActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum DbmSamplesActions {
+    /// Search DBM query samples
+    Search {
+        #[arg(long, help = "Search query (required)")]
+        query: String,
+        #[arg(
+            long,
+            default_value = "1h",
+            help = "Start time: 1h, 5min, 2hours, '5 minutes', RFC3339, Unix timestamp, or 'now'"
+        )]
+        from: String,
+        #[arg(
+            long,
+            default_value = "now",
+            help = "End time: 1h, 5min, 2hours, '5 minutes', RFC3339, Unix timestamp, or 'now'"
+        )]
+        to: String,
+        #[arg(long, default_value_t = 10, help = "Maximum number of samples")]
+        limit: i32,
+        #[arg(
+            long,
+            default_value = "desc",
+            help = "Sort order: asc, desc, timestamp, or -timestamp"
+        )]
+        sort: String,
+    },
 }
 
 // ---- DDSQL ----
@@ -8871,6 +8927,20 @@ async fn main_inner() -> anyhow::Result<()> {
                 },
             }
         }
+        // --- DBM ---
+        Commands::Dbm { action } => match action {
+            DbmActions::Samples { action } => match action {
+                DbmSamplesActions::Search {
+                    query,
+                    from,
+                    to,
+                    limit,
+                    sort,
+                } => {
+                    commands::dbm::samples_search(&cfg, query, from, to, limit, sort).await?;
+                }
+            },
+        },
         // --- Data Governance ---
         Commands::DataGovernance { action } => {
             cfg.validate_auth()?;

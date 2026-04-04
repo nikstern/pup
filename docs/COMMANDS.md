@@ -1,6 +1,6 @@
 # Command Reference
 
-Complete reference for all 55 command groups in Pup.
+Complete reference for all 56 command groups in Pup.
 
 ## Command Pattern
 
@@ -26,6 +26,7 @@ pup <domain> <subgroup> <action> [options] # Nested commands
 | traces | - | - | ❌ |
 | monitors | list, get, delete, search | src/commands/monitors.rs | ✅ |
 | dashboards | list, get, delete, url | src/commands/dashboards.rs | ✅ |
+| dbm | samples (search) | src/commands/dbm.rs | ✅ |
 | ddsql | table, time-series | src/commands/ddsql.rs | ✅ |
 | debugger | probes (list, get, create, delete, watch) | src/commands/debugger.rs | ✅ |
 | slos | list, get, delete, status | src/commands/slos.rs | ✅ |
@@ -76,7 +77,7 @@ pup <domain> <subgroup> <action> [options] # Nested commands
 | change-requests | create, get, update, create-branch, decisions (update, delete) | src/commands/change_management.rs | ✅ |
 | app-builder | list, get, create, update, delete, delete-batch, publish, unpublish | src/commands/app_builder.rs | ✅ |
 
-**Summary:** 55 working, 0 API-blocked, 0 placeholders
+**Summary:** 56 working, 0 API-blocked, 0 placeholders
 
 **Note:** RUM command is fully operational. Apps and sessions work completely. Metrics and retention-filters support list/get operations (create/update/delete operations pending due to complex API type structures).
 
@@ -102,6 +103,7 @@ pup slos get abc-123-def
 ```bash
 pup logs search --query="status:error" --from="1h"
 pup logs search --query="service:api" --from="7d" --storage="flex"
+pup dbm samples search --query="dbm_type:activity service:orders env:prod" --from="1h" --limit=10
 pup metrics search --query="avg:system.cpu.user{*}" --from="1h"
 pup metrics query --query="avg:system.cpu.user{*}" --from="1h"
 pup events search --query="@user.id:12345"
@@ -128,6 +130,7 @@ pup infrastructure hosts list
 ### Data & Observability
 - **metrics** - Time-series metrics (query, list, get, search)
 - **logs** - Log search and analysis (search, list, aggregate)
+- **dbm** - Database Monitoring query samples (samples search)
 - **traces** - APM traces (not yet implemented - use `apm` commands instead)
 - **rum** - Real User Monitoring (apps, metrics, retention-filters, sessions)
 - **events** - Infrastructure events (list, search, get)

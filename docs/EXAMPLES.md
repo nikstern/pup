@@ -177,6 +177,24 @@ pup dashboards url "abc-123-def"
 pup dashboards delete "abc-123-def" --yes
 ```
 
+## Database Monitoring
+
+### Search DBM Query Samples
+```bash
+# Search recent DBM activity samples
+pup dbm samples search --query="dbm_type:activity service:orders env:prod" --from="1h" --limit=10
+
+# Search a specific database host
+pup dbm samples search --query="db.hostname:primary-db service:checkout" --from="30m" --sort="asc"
+
+# Search an explicit time window
+pup dbm samples search \
+  --query="service:payments @db.statement_type:select" \
+  --from="2024-02-04T10:00:00Z" \
+  --to="2024-02-04T11:00:00Z" \
+  --limit=25
+```
+
 ## SLOs
 
 ### List SLOs

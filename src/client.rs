@@ -670,8 +670,27 @@ pub async fn raw_post(
     body: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let url = format!("{}{}", cfg.api_base_url(), path);
+    raw_post_with_url(cfg, &url, body).await
+}
+
+/// Makes an authenticated POST request to the Datadog app host via reqwest.
+/// Used for endpoints not covered by the typed DD API client that live on app.<site>.
+pub async fn raw_post_app(
+    cfg: &Config,
+    path: &str,
+    body: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let url = format!("{}{}", cfg.app_base_url(), path);
+    raw_post_with_url(cfg, &url, body).await
+}
+
+async fn raw_post_with_url(
+    cfg: &Config,
+    url: &str,
+    body: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
     let client = reqwest::Client::new();
-    let mut req = client.post(&url);
+    let mut req = client.post(url);
 
     if let Some(token) = &cfg.access_token {
         req = req.header("Authorization", format!("Bearer {token}"));
@@ -938,6 +957,33 @@ mod tests {
         std::env::remove_var("PUP_MOCK_SERVER");
         std::env::remove_var("DD_API_KEY");
         std::env::remove_var("DD_APP_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_raw_post_app_uses_app_base_url() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut server = mockito::Server::new_async().await;
+        std::env::set_var("PUP_MOCK_SERVER", server.url());
+
+        let _mock = server
+            .mock("POST", "/api/v1/test")
+            .match_body(mockito::Matcher::Json(serde_json::json!({ "ok": true })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"ok"}"#)
+            .create_async()
+            .await;
+
+        let result = raw_post_app(
+            &test_cfg(),
+            "/api/v1/test",
+            serde_json::json!({ "ok": true }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["status"], "ok");
+        std::env::remove_var("PUP_MOCK_SERVER");
     }
 
     #[test]

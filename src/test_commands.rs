@@ -2392,6 +2392,53 @@ async fn mock_post(
         .await
 }
 
+#[tokio::test]
+async fn test_dbm_samples_search_uses_app_endpoint_and_payload() {
+    let _lock = lock_env();
+    let mut server = mockito::Server::new_async().await;
+    let cfg = test_config(&server.url());
+
+    let _mock = server
+        .mock("POST", "/api/v1/logs-analytics/list")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "type".into(),
+            "databasequery".into(),
+        ))
+        .match_body(mockito::Matcher::Regex(
+            r#""indexes":\["databasequery"\]"#.to_string(),
+        ))
+        .match_body(mockito::Matcher::Regex(
+            r#""query":"service:db""#.to_string(),
+        ))
+        .match_body(mockito::Matcher::Regex(
+            r#""sorts":\["timestamp"\]"#.to_string(),
+        ))
+        .match_body(mockito::Matcher::Regex(r#""from":\d{13}"#.to_string()))
+        .match_body(mockito::Matcher::Regex(r#""to":\d{13}"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[]}"#)
+        .create_async()
+        .await;
+
+    let result = crate::commands::dbm::samples_search(
+        &cfg,
+        "service:db".into(),
+        "1h".into(),
+        "now".into(),
+        10,
+        "asc".into(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "dbm samples search failed: {:?}",
+        result.err()
+    );
+    cleanup_env();
+}
+
 // Helper: create a mock for a specific GET path
 async fn mock_get(
     server: &mut mockito::Server,
@@ -3486,6 +3533,48 @@ fn test_top_level_commands_sorted_alphabetically() {
         names, sorted,
         "top-level commands must be in alphabetical order.\nActual:   {names:?}\nExpected: {sorted:?}"
     );
+}
+
+#[test]
+fn test_dbm_samples_search_parses() {
+    use clap::Parser;
+
+    let cli = crate::Cli::try_parse_from([
+        "pup",
+        "dbm",
+        "samples",
+        "search",
+        "--query",
+        "service:db",
+        "--from",
+        "1h",
+        "--limit",
+        "10",
+        "--sort",
+        "asc",
+    ])
+    .expect("dbm samples search should parse");
+
+    match cli.command {
+        crate::Commands::Dbm { action } => match action {
+            crate::DbmActions::Samples { action } => match action {
+                crate::DbmSamplesActions::Search {
+                    query,
+                    from,
+                    to,
+                    limit,
+                    sort,
+                } => {
+                    assert_eq!(query, "service:db");
+                    assert_eq!(from, "1h");
+                    assert_eq!(to, "now");
+                    assert_eq!(limit, 10);
+                    assert_eq!(sort, "asc");
+                }
+            },
+        },
+        _ => panic!("expected Commands::Dbm"),
+    }
 }
 
 // ---- Debugger ----

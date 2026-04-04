@@ -20,6 +20,7 @@ pub mod containers;
 pub mod cost;
 pub mod dashboards;
 pub mod data_governance;
+pub mod dbm;
 pub mod ddsql;
 pub mod debugger;
 pub mod deployment_gates;
